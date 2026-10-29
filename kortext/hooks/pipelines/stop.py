@@ -385,8 +385,7 @@ class OutcomePersistenceGuard:
 
 class MINJAFactSanitizer:
     """
-    Sanitizes candidate learned facts with CausalSanitizer and persists valid facts to the episodic graph
-    and InstinctStore.
+    Sanitizes candidate learned facts with CausalSanitizer and persists valid facts to the episodic graph.
     """
 
     def __init__(self, persist: bool = True, driver: Optional[Any] = None):
@@ -440,10 +439,11 @@ class MINJAFactSanitizer:
                     logger.warning("[MINJAFactSanitizer] Fact blocked by CausalSanitizer: %s", exc)
                     continue
         except Exception as e:
-            logger.debug("CausalSanitizer import/execution bypassed: %s", e)
-            sanitized = raw_facts
+            # Fail closed: an unsanitized fact must never reach memory.
+            logger.warning("CausalSanitizer unavailable, dropping %d facts: %s", len(raw_facts), e)
+            sanitized = []
 
-        # 4. Persist sanitized facts to FalkorDB episodic graph and InstinctStore
+        # 4. Persist sanitized facts to FalkorDB episodic graph
         if sanitized and self.persist:
             try:
                 active_driver = self.driver
@@ -460,7 +460,6 @@ class MINJAFactSanitizer:
                     obj = str(sf.get("target") or sf.get("object") or rel)
                     fact_text = str(sf.get("fact") or str(sf))
                     tier = int(sf.get("source_tier", 2))
-                    inst_trust = "speculative"  # extracted from transcript text, never tool-confirmed
                     try:
                         active_driver.record_fact(
                             subject=sub,
@@ -470,15 +469,6 @@ class MINJAFactSanitizer:
                             source_session=session_name,
                             source_tier=tier,
                             project=project_id,
-                        )
-                        from kortext.trust.instincts import InstinctStore
-
-                        InstinctStore().observe(
-                            pattern=f"Session learned rule on {sub} ({rel})",
-                            action=fact_text,
-                            domain=rel.lower(),
-                            project=project_id,
-                            trust_level=inst_trust,
                         )
                     except Exception as persist_err:
                         logger.debug("Fact persistence skipped: %s", persist_err)

@@ -28,8 +28,8 @@ flowchart TD
         T0["Tier 0: Tree-sitter AST B-Tree\n(Deterministic Declarations, Signatures, Callers)"]
         T1["Tier 1: Qdrant Vector Store\n(384d Dense Embeddings + BM25 Lexical)"]
         T2["Tier 2: FalkorDB Episodic & Causal Graph\n(Temporal Decisions, Milestones, Invariants)"]
-        T3["Tier 3: Federated Hybrid Engine\n(Reciprocal Rank Fusion + HippoRAG PPR)"]
-        T4["Tier 4: Cognitive Dream Mode\n(Weibull Decay, Louvain Subsystems, Distillation)"]
+        T3["Tier 3: Federated Hybrid Engine\n(Weighted Reciprocal Rank Fusion)"]
+        T4["Tier 4: Cognitive Dream Mode\n(Pruning, Louvain Subsystems, Distillation)"]
     end
 
     Router --> T0
@@ -54,8 +54,8 @@ flowchart TD
 | **Tier 0: AST B-Tree** | FalkorDB `kortext_symbols` | Exact symbol declarations, type signatures, file boundaries, and direct callers/callees extracted via Tree-sitter. | <2 ms | **Absolute Ground Truth.** Overrides all model speculations. |
 | **Tier 1: Vectors** | Qdrant (embedded or HTTP) | Dense code chunk embeddings (FastEmbed 384d ONNX / BAAI/bge-small-en-v1.5) paired with BM25 sparse keyword indices. | <10 ms | Semantic concept discovery and associative document retrieval. |
 | **Tier 2: Episodic** | FalkorDB `kortext` | Bi-temporal episodic decisions, configuration changes, bug fixes, and architectural invariants recorded across coding sessions. | <3 ms | Temporal persistence. Old facts are superseded via `[:SUPERSEDES]`, never deleted. |
-| **Tier 3: Federated** | Python Engine | Cross-tier Reciprocal Rank Fusion (RRF) and HippoRAG Personalized PageRank (PPR) power iterations linking episodic intent to AST code paths. | <15 ms | Multi-hop associative reasoning. |
-| **Tier 4: Dream Mode** | Background Worker | Offline memory consolidation: Weibull synaptic decay, Louvain community subsystem detection, MEX pattern AST drift auditing, fact consolidation, and skill distillation. | Batch | Autonomous memory optimization and hygiene. |
+| **Tier 3: Federated** | Python Engine | Weighted Reciprocal Rank Fusion (RRF) over AST symbol hits, BM25, dense vectors and current episodic facts paths. | <15 ms | Multi-hop associative reasoning. |
+| **Tier 4: Dream Mode** | Background Worker | Offline memory consolidation: pruning of superseded facts, Louvain community subsystem detection, MEX pattern AST drift auditing, fact consolidation, and skill distillation. | Batch | Autonomous memory optimization and hygiene. |
 
 ---
 
@@ -82,16 +82,17 @@ graph TD
         QdrantEngine["Qdrant Vector Daemon\n(REST :6333 / gRPC :6334)"]
     end
 
-    Agent -->|FastMCP stdio| MCP
+    Agent -->|stdio proxy, then HTTP 127.0.0.1:8767| MCP
     Hooks -->|UDS / Loopback TCP| FalkorDB
-    Subagents -->|FastMCP stdio| MCP
+    Subagents -->|stdio proxy, then HTTP 127.0.0.1:8767| MCP
     MCP -->|Direct Embed / HTTP| QdrantEngine
     MCP -->|Unix Socket ~/.kortext/run/falkordb.sock| FalkorDB
 ```
 
 ### The FastMCP Sole Custodian Invariant
 - **Advisory Lock Collisions:** Embedded Qdrant utilizes SQLite and RocksDB metadata stores that acquire exclusive OS file locks (`LOCK_EX`). If subagents or lifecycle hooks were to instantiate `QdrantClient(path=...)` directly in embedded mode while the server is active, the operating system raises `sqlite3.OperationalError: database is locked`, corrupting vector segments.
-- **Sole Custodianship:** The FastMCP daemon (`kortext.server`) is the single, exclusive owner of vector stores. All vector queries, upserts, payload filtering, and indexing flow strictly through FastMCP tools (`search_knowledge_and_memory`, `record_system_outcome`).
+- **Sole Custodianship:** One daemon per machine (`kortext-server --daemon`, HTTP on `127.0.0.1:$KORTEXT_DAEMON_PORT`, default 8767) owns the vector store. Every agy window runs `kortext-server`, a stdio proxy that starts the daemon on first use and forwards to it, so a second window shares the daemon instead of failing on the embedded-storage lock. No Qdrant container is needed. Requests need the bearer token in `~/.kortext/run/daemon.token` (mode 0600). `kortext ingest` hands the work to the daemon when the daemon holds the lock, and the file watcher spools invalidation events for it. `KORTEXT_SERVER_MODE=inprocess` serves a window directly, without the daemon; that is also the fallback when the daemon fails to start (log: `~/.kortext/logs/daemon.log`).
+- **Re-index failures:** a spooled invalidation event is deleted only after its file re-indexes. A failure is retried with backoff (10 s, 20 s, 40 s, 80 s); after 5 attempts the event moves to `~/.kortext/spool/failed/`, the agent gets an advisory on its next turn, and `check_kortext_health` reports the failures. Move an event back to `spool/invalidation/` to retry it.
 
 ### Dual-Socket FalkorDB Transport
 - **Primary Transport:** Unix Domain Socket (UDS) at `~/.kortext/run/falkordb.sock` for ultra-low latency (<1ms IPC roundtrip).

@@ -54,5 +54,5 @@ Enforces an ironclad pre-completion gate: every completion claim must be backed 
 ## 5. Post-Session Retrospective & Glossary Sharpening (`/retro`)
 
 At the end of a milestone or complex session:
-1. **Extract Project-Scoped Instincts**: Persist non-trivial debugging breakthroughs or project conventions via `record_system_outcome(category="decision", trust_level="tool_confirmed")`.
+1. **Record project lessons**: Persist non-trivial debugging breakthroughs or project conventions via `record_system_outcome(category="decision", trust_level="tool_confirmed")`.
 2. **Sharpen Ubiquitous Language (`GLOSSARY.md`)**: Append concise 1-row definitions for any newly introduced domain concepts to `GLOSSARY.md` so future sessions share the exact terminology.

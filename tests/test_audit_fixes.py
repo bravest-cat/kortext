@@ -248,50 +248,6 @@ def test_fix_section_3f_sanitizer_html_comments_base64_and_tier3_normative(tmp_p
         sanitizer.sanitize("Doc", "NOTE", f"Payload: {b64_payload}", source_tier=3)
 
 
-def test_fix_section_3d_hipporag_symbol_bridge():
-    """Audit 3.D.1: Verifies _fetch_hippo_subgraph bridges to DEFAULT_SYMBOLS_GRAPH when DEFAULT_DATABASE returns empty PPR."""
-    from kortext.retrieval.engine import RetrievalEngine
-
-    engine = RetrievalEngine.__new__(RetrievalEngine)
-    engine._hippo = MagicMock()
-    # First call (DEFAULT_DATABASE) returns [], second call (DEFAULT_SYMBOLS_GRAPH) returns [('RetrievalEngine', 0.42)]
-    engine._hippo.retrieve_associative_subgraph.side_effect = [
-        [],
-        [("RetrievalEngine", 0.42)],
-    ]
-    engine._falkordb = MagicMock()
-    engine._falkordb._is_live_falkor_client = True
-    engine._falkordb.query.return_value = [
-        ["s.name", "s.kind", "f.path", "r.line", "r.signature"],
-        [["RetrievalEngine", "class", "kortext/retrieval/engine.py", 128, "class RetrievalEngine:"]],
-    ]
-
-    passages = engine._fetch_hippo_subgraph(["RetrievalEngine"])
-    assert len(passages) == 1
-    assert "Associative Symbol Graph" in passages[0]
-    assert "RetrievalEngine" in passages[0]
-
-
-def test_fix18_instinct_store_legacy_list_migration(tmp_path: Path):
-    """Bug 7: Verifies InstinctStore migrates legacy {'instincts': [...]} list schema cleanly."""
-    from kortext.trust.instincts import InstinctStore
-
-    store_path = tmp_path / "instincts.json"
-    store_path.write_text(
-        json.dumps({
-            "version": "1.0",
-            "instincts": [
-                {"id": "inst_1", "pattern": "Always use seek_symbol", "confidence": 0.85, "domain": "ast", "project": "kortext"}
-            ],
-        }),
-        encoding="utf-8",
-    )
-    store = InstinctStore(storage_path=store_path)
-    active = store.get_active_instincts(min_confidence=0.5)
-    assert len(active) == 1
-    assert active[0]["id"] == "inst_1"
-
-
 def test_fix19_post_compaction_resumption_and_boost_grounding_file(tmp_path: Path, seeded_symbol_graph):
     """Audit 4.A.3 & 4.C.3: Verifies '# Resuming from a compaction' detection and boost_grounding.md creation."""
     from kortext.hooks.context import HookContext

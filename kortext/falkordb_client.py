@@ -185,8 +185,7 @@ class FalkorDBClient:
                         "socket_timeout": 5.0,
                         **fast_fail,
                     }
-                    if self.max_connections != 32:
-                        uds_kwargs["max_connections"] = self.max_connections
+                    uds_kwargs["max_connections"] = self.max_connections
                     r = redis.Redis(**uds_kwargs)
                     r.ping()
                     self._r = r
@@ -203,8 +202,7 @@ class FalkorDBClient:
                 "socket_timeout": 5.0,
                 **fast_fail,
             }
-            if self.max_connections != 32:
-                tcp_kwargs["max_connections"] = self.max_connections
+            tcp_kwargs["max_connections"] = self.max_connections
             self._r = redis.Redis(**tcp_kwargs)
             return self._r
 

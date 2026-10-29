@@ -659,11 +659,11 @@
           </div>
         </div>
 
-        <!-- Tier 1: Reranked Code with RRF signals -->
+        <!-- Tier 1: Code with RRF signals -->
         <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-4 space-y-2">
           <div class="flex items-center justify-between">
             <h3 class="font-semibold text-emerald-400 text-sm flex items-center gap-2">
-              <span>●</span> Tier 1: Reranked Code
+              <span>●</span> Tier 1: Code
             </h3>
             <span id="tier1-count" class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800/60">0 chunks</span>
           </div>
@@ -673,7 +673,7 @@
           </div>
         </div>
 
-        <!-- Tier 2: Episodic Memory with Weibull retention -->
+        <!-- Tier 2: Episodic Memory -->
         <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-4 space-y-2">
           <div class="flex items-center justify-between">
             <h3 class="font-semibold text-purple-400 text-sm flex items-center gap-2">
@@ -681,7 +681,7 @@
             </h3>
             <span id="tier2-count" class="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-800/60">0 facts</span>
           </div>
-          <p class="text-xs text-slate-400">Consolidated episodic history filtered by Weibull retention decay.</p>
+          <p class="text-xs text-slate-400">Current episodic facts (superseded facts excluded).</p>
           <div id="tier2-content" class="text-xs text-slate-300 font-mono space-y-2 pt-2 overflow-auto max-h-96">
             <span class="text-slate-400">Submit a query to see episodic memories.</span>
           </div>
@@ -857,19 +857,8 @@
         </div>
       </div>
 
-      <!-- Continuous Learning (InstinctStore) & Grounded Invariants Manager -->
-      <div class="pt-3 grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-5 space-y-3">
-          <div class="flex items-center justify-between">
-            <h3 class="text-sm font-semibold text-white flex items-center gap-2">
-              <i data-lucide="brain" class="w-4 h-4 text-indigo-400"></i> Continuous Learning (`InstinctStore`)
-            </h3>
-            <span id="instincts-count-badge" class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300 border border-indigo-500/30 font-bold">0 Learned</span>
-          </div>
-          <p class="text-xs text-slate-400">Error→Fix tool observations and cross-project patterns with provenance trust tiers (`tool_confirmed`, `user_approved`).</p>
-          <div id="instincts-manager-list" class="space-y-2 max-h-60 overflow-y-auto"></div>
-        </div>
-
+      <!-- Grounded Invariants -->
+      <div class="pt-3">
         <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-5 space-y-3">
           <div class="flex items-center justify-between">
             <h3 class="text-sm font-semibold text-white flex items-center gap-2">
@@ -959,7 +948,7 @@
       <div class="space-y-3 text-xs text-slate-300">
         <p>Dream Mode executes 5 offline consolidation phases:</p>
         <ul class="list-disc list-inside space-y-1 text-slate-400 font-mono text-[11px]">
-          <li>Phase 1: Synaptic Pruning (resolves contradictions & archives stale facts via Weibull decay)</li>
+          <li>Phase 1: Pruning (resolves contradictions and archives superseded facts)</li>
           <li>Phase 2: Louvain Subsystem Community Clustering via NetworkX</li>
           <li>Phase 3: High-Density Invariant Induction across architectural decisions</li>
           <li>Phase 4: Fact Consolidation (distills micro-facts into macro-truths)</li>

@@ -7,15 +7,15 @@ description: Use when querying Kortext 5-tier memory, onboarding to an unfamilia
 
 Governs contextual retrieval across the 5-signal memory substrate, search-before-coding (`search-first`), systematic codebase onboarding, and substrate diagnostics.
 
-## 1. The 5-Tier Memory Architecture
+## 1. What is indexed where
 
-| Tier | Substrate / Engine | Latency | Primary Tool | Best For |
-|---|---|---|---|---|
-| **Tier 0** | FalkorDB `kortext_symbols` (Tree-sitter AST B-Tree) | `<2ms` | `seek_symbol`, `trace_symbol_impact` | Exact symbol definitions, line spans, upstream/downstream call graphs |
-| **Tier 1** | FalkorDB `kortext` (Bi-temporal Episodic Graph) | `<5ms` | `search_knowledge_and_memory` | Prior ADRs, architectural decisions, bug root causes, task outcomes |
-| **Tier 2** | OpenViking Structural Topology | `<10ms` | `search_knowledge_and_memory` | Package hierarchy, module boundaries, entry-point maps |
-| **Tier 3** | Qdrant Hybrid Store (Dense MRL + Sparse BM25) | `<50ms` | `search_knowledge_and_memory` | Conceptual code search, docstrings, error messages |
-| **Tier 4** | HippoRAG Personalized PageRank (PPR) | `<80ms` | `search_knowledge_and_memory` | Multi-hop associative discovery across disparate subsystems |
+| Store | Holds | Tool | Best for |
+|---|---|---|---|
+| FalkorDB `kortext_symbols` | Tree-sitter symbols, files, CALLS/IMPORTS edges | `seek_symbol`, `trace_symbol_impact` | Exact definitions, line spans, callers and callees |
+| FalkorDB `kortext` | Episodic facts and decisions, valid-time tracked | `search_knowledge_and_memory` | Prior decisions, bug root causes, task outcomes |
+| Qdrant (dense + BM25) | Code and doc chunks | `search_knowledge_and_memory` | Concepts, docstrings, error messages |
+
+`search_knowledge_and_memory` fuses symbol hits, BM25, dense vectors and current facts with weighted RRF.
 
 ## 2. Iterative Retrieval & Context Packing
 

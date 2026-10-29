@@ -49,23 +49,10 @@ async def trigger_dream(request: Request):
 
 
 def _is_sole_custodian_running() -> bool:
-    """Checks if the primary kortext.server daemon is currently running."""
-    try:
-        import psutil
+    """True when another process (normally the kortext daemon) holds the embedded Qdrant lock."""
+    from kortext._qdrant import is_embedded_qdrant_locked
 
-        current_pid = os.getpid()
-        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                if proc.info["pid"] == current_pid:
-                    continue
-                cmdline = " ".join(proc.info.get("cmdline") or [])
-                if any(srv in cmdline for srv in ("kortext.server", "kortext-server")):
-                    return True
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-    except Exception:
-        logger.debug("Suppressed non-fatal exception")
-    return False
+    return is_embedded_qdrant_locked()
 
 
 async def _check_remote_qdrant(url: str = "http://127.0.0.1:6333") -> bool:

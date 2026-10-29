@@ -19,7 +19,6 @@ from kortext._env import (
     get_qdrant_collection,
     get_embed_base_url,
     get_embed_model_name,
-    get_rerank_base_url,
 )
 import kortext
 
@@ -39,7 +38,6 @@ def test_kortext_package_exports():
         "get_qdrant_collection",
         "get_embed_base_url",
         "get_embed_model_name",
-        "get_rerank_base_url",
     ]
     for name in expected_exports:
         assert hasattr(kortext, name), f"kortext is missing export {name}"
@@ -288,14 +286,3 @@ class TestSpecializedGetters:
 
         monkeypatch.setenv("KORTEXT_EMBED_MODEL_NAME", "custom-kortext-embed")
         assert get_embed_model_name() == "custom-kortext-embed"
-
-    def test_get_rerank_base_url_default_and_override(self, monkeypatch):
-        monkeypatch.delenv("KORTEXT_RERANK_BASE_URL", raising=False)
-        monkeypatch.delenv("RERANK_BASE_URL", raising=False)
-        assert get_rerank_base_url() == "http://localhost:8000/v1"
-
-        monkeypatch.setenv("RERANK_BASE_URL", "http://localhost:9002/v1")
-        assert get_rerank_base_url() == "http://localhost:9002/v1"
-
-        monkeypatch.setenv("KORTEXT_RERANK_BASE_URL", "http://localhost:9003/v1")
-        assert get_rerank_base_url() == "http://localhost:9003/v1"

@@ -19,7 +19,6 @@ from kortext._env import (
     get_embed_base_url,
     get_embed_model_name,
     get_embed_dimension,
-    get_rerank_base_url,
 )
 
 logger = logging.getLogger(__name__)

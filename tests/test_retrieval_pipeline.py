@@ -1,50 +1,19 @@
 """
-Unit tests for 5-Signal Hybrid RRF Retrieval Pipeline and TAA-k Trimming.
+Unit tests for the hybrid RRF retrieval pipeline.
 """
 
 from pathlib import Path
 import pytest
 from kortext.retrieval.engine import (
-    apply_taak_trimming,
     RetrievalEngine,
     extract_passage_text,
     K_RRF,
     W_AST,
     W_DENSE,
 )
-from kortext.retrieval.reranker import (
-    DEFAULT_RERANK_TIMEOUT_SECONDS,
-    RerankerEngine,
-)
 
 
 class TestRetrievalPipeline:
-    def test_taak_trimming_cliff_detection(self):
-        """Verifies TAA-k correctly detects score drop and drops distractor passages."""
-        # 3 high relevance docs, followed by sudden cliff, then low score distractors
-        scored = [
-            ("doc1", 0.045),
-            ("doc2", 0.042),
-            ("doc3", 0.040),
-            ("distractor1", 0.005),
-            ("distractor2", 0.004),
-            ("distractor3", 0.003),
-        ]
-        trimmed = apply_taak_trimming(scored, k_min=3, k_max=15)
-        # Should cut off at 3 docs
-        assert trimmed == ["doc1", "doc2", "doc3"]
-
-    def test_taak_trimming_minimum_floor(self):
-        """Verifies that k_min is respected even if cliff is earlier."""
-        scored = [
-            ("doc1", 0.9),
-            ("doc2", 0.1),
-            ("doc3", 0.09),
-            ("doc4", 0.08),
-        ]
-        trimmed = apply_taak_trimming(scored, k_min=3, k_max=10)
-        assert len(trimmed) >= 3
-
     def test_extract_passage_text(self):
         assert extract_passage_text({"text": "hello world"}) == "hello world"
         assert extract_passage_text({"document": "doc body"}) == "doc body"
@@ -58,14 +27,9 @@ class TestRetrievalPipeline:
         assert "SymbolSeekEngine" in candidates
 
     def test_signal_weights(self):
-        """Verifies 5-signal RRF weights match architectural specification and sum to 1.0."""
-        from kortext.retrieval.engine import W_BM25, W_HIPPO, W_TEMPORAL
-        assert W_AST == 0.30
-        assert W_BM25 == 0.20
-        assert W_DENSE == 0.25
-        assert W_HIPPO == 0.15
-        assert W_TEMPORAL == 0.10
-        assert pytest.approx(W_AST + W_BM25 + W_DENSE + W_HIPPO + W_TEMPORAL) == 1.0
+        """The four default RRF weights sum to 1.0."""
+        from kortext.retrieval.engine import W_BM25, W_TEMPORAL
+        assert pytest.approx(W_AST + W_BM25 + W_DENSE + W_TEMPORAL) == 1.0
 
     def test_get_sparse_embedding(self, caplog):
         """Verifies BM25 sparse embedding handles empty input, formats valid output, and falls back gracefully on error."""
@@ -188,7 +152,6 @@ class TestRetrievalPipeline:
             with patch.object(engine, "_get_query_embedding", AsyncMock(return_value=[0.1, 0.2])), \
                  patch.object(engine, "_get_sparse_embedding", return_value=([42], [1.0])), \
                  patch.object(engine, "_fetch_ast_matches", return_value=["[AST] Definition"]), \
-                 patch.object(engine, "_fetch_hippo_subgraph", return_value=["[Hippo] Rel"]), \
                  patch.object(engine, "_fetch_temporal_facts", return_value=["[Temporal] Fact"]), \
                  patch.object(engine, "_retrieve_qdrant_points", AsyncMock(return_value=["[Dense] Match"])), \
                  patch.object(engine, "_retrieve_qdrant_sparse_points", AsyncMock(return_value=["[Sparse] BM25 Match"])):
@@ -238,7 +201,6 @@ class TestRetrievalPipeline:
             with patch.object(engine, "_get_query_embedding", AsyncMock(return_value=[0.1, 0.2])), \
                  patch.object(engine, "_get_sparse_embedding", return_value=([42], [1.0])), \
                  patch.object(engine, "_fetch_ast_matches", ast_fetch_mock), \
-                 patch.object(engine, "_fetch_hippo_subgraph", return_value=[]), \
                  patch.object(engine, "_fetch_temporal_facts", return_value=[]), \
                  patch.object(engine, "_retrieve_qdrant_points", AsyncMock(return_value=["### AST Symbol: `StrayAst` (func)", "Real code chunk"])), \
                  patch.object(engine, "_retrieve_qdrant_sparse_points", AsyncMock(return_value=["### ast symbol: stray", "Another code chunk"])):
@@ -285,7 +247,6 @@ class TestRetrievalPipeline:
             with patch.object(engine, "_get_query_embedding", AsyncMock(return_value=[0.1, 0.2])), \
                  patch.object(engine, "_get_sparse_embedding", return_value=([1], [1.0])), \
                  patch.object(engine, "_fetch_ast_matches", return_value=[]), \
-                 patch.object(engine, "_fetch_hippo_subgraph", return_value=[]), \
                  patch.object(engine, "_fetch_temporal_facts", return_value=[]), \
                  patch.object(engine, "_retrieve_qdrant_points", side_effect=fake_retrieve_dense), \
                  patch.object(engine, "_retrieve_qdrant_sparse_points", side_effect=fake_retrieve_sparse):
@@ -299,63 +260,6 @@ class TestRetrievalPipeline:
                 if "col1_dense_low" in results:
                     idx_c1_low = results.index("col1_dense_low")
                     assert idx_c2_top < idx_c1_low
-
-        asyncio.run(_run())
-
-    def test_reranker_timeout_and_offline_fallback(self):
-        """Verifies RerankerEngine has 250ms timeout and falls back to offline tie-breaker on timeout or error."""
-        import asyncio
-        from unittest.mock import AsyncMock, patch, MagicMock
-        import httpx
-
-        async def _run():
-            engine = RerankerEngine()
-            # Verify strict 250ms timeout configuration
-            assert engine.timeout_s == DEFAULT_RERANK_TIMEOUT_SECONDS
-            assert engine.timeout_s == 0.250
-
-            candidates = [
-                {"text": "Relevant result matching def calculate_metrics()", "score": 0.05},
-                {"text": "Unrelated documentation text", "score": 0.01},
-            ]
-
-            # 1. Timeout fallback: server takes >250ms or raises httpx.TimeoutException
-            with patch("kortext.retrieval.reranker.is_ci_mode", return_value=False):
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Request timed out after 250ms"))
-                engine._client = mock_client
-
-                results_timeout = await engine.rerank("def calculate_metrics", candidates, top_k=2)
-                assert len(results_timeout) == 2
-                assert all(c.get("offline_fallback") is True for c in results_timeout)
-                assert results_timeout[0]["rerank_score"] >= results_timeout[1]["rerank_score"]
-                # The candidate with term match should rank higher offline
-                assert "calculate_metrics" in results_timeout[0]["text"]
-
-            # 2. Server unavailable / Connection error fallback
-            with patch("kortext.retrieval.reranker.is_ci_mode", return_value=False):
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused to rerank daemon"))
-                engine._client = mock_client
-
-                results_conn = await engine.rerank("def calculate_metrics", candidates, top_k=2)
-                assert len(results_conn) == 2
-                assert all(c.get("offline_fallback") is True for c in results_conn)
-                assert results_conn[0]["rerank_score"] >= results_conn[1]["rerank_score"]
-
-            # 3. HTTP 500 internal server error fallback
-            with patch("kortext.retrieval.reranker.is_ci_mode", return_value=False):
-                mock_resp = MagicMock()
-                mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError("500 Internal Server Error", request=MagicMock(), response=mock_resp)
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_resp)
-                engine._client = mock_client
-
-                results_500 = await engine.rerank("def calculate_metrics", candidates, top_k=2)
-                assert len(results_500) == 2
-                assert all(c.get("offline_fallback") is True for c in results_500)
-
-            await engine.close()
 
         asyncio.run(_run())
 
@@ -545,41 +449,4 @@ class TestRetrievalPipeline:
                 assert vec_params.size == 1024
 
         asyncio.run(_run())
-
-    def test_reranker_handles_unreachable_endpoint_gracefully(self, caplog):
-        """Verifies RerankerEngine handles unreachable/offline endpoints by logging and returning candidates ordered by score."""
-        import asyncio
-        import logging
-        from unittest.mock import patch
-
-        async def _run():
-            # Test with an invalid / unreachable endpoint
-            engine = RerankerEngine(base_url="http://127.0.0.1:59999/v1")
-            candidates = [
-                {"text": "Lower score item", "score": 0.10},
-                {"text": "Higher score item", "score": 0.90},
-                {"text": "Medium score item", "score": 0.50},
-            ]
-
-            with patch("kortext.retrieval.reranker.is_ci_mode", return_value=False):
-                with caplog.at_level(logging.DEBUG, logger="kortext.retrieval.reranker"):
-                    caplog.clear()
-                    results = await engine.rerank("query without matching keywords", candidates, top_k=3)
-
-                assert len(results) == 3
-                assert all(c.get("offline_fallback") is True for c in results)
-                # Candidates must be cleanly ordered by input score
-                assert results[0]["text"] == "Higher score item"
-                assert results[1]["text"] == "Medium score item"
-                assert results[2]["text"] == "Lower score item"
-                # Must log debug or warning
-                assert any(
-                    "Reranker unavailable" in record.message or "offline" in record.message.lower()
-                    for record in caplog.records
-                )
-
-            await engine.close()
-
-        asyncio.run(_run())
-
 

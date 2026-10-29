@@ -40,7 +40,7 @@ Instead, agents MUST use the compiler-grade AST B-Tree index and graph memory:
 | Find class declaration | `rg "class TokenOptimizer"` | `seek_symbol(symbol_name="TokenOptimizer")` |
 | Trace call sites & blast radius | `rg "record_system_outcome\("` | `trace_symbol_impact(symbol="record_system_outcome", direction="upstream")` |
 | Trace symbol dependencies | Multi-file regex hunting across imports | `trace_symbol_impact(symbol="VectorStore", direction="downstream")` |
-| Locate architectural concept | `rg -i "decay formula"` | `search_knowledge_and_memory(query="weibull decay formula")` |
+| Locate architectural concept | `rg -i "fusion weights"` | `search_knowledge_and_memory(query="RRF fusion weights")` |
 | Read surrounding code | Unbounded regex dump into context | `view_file` targeted to line range from `seek_symbol` |
 
 ## Context Economics & Token Budgeting Rationale

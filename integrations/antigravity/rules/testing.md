@@ -57,25 +57,16 @@ TDD is **MANDATORY** for all implementation tasks:
 Structure all test functions using the **Arrange-Act-Assert** pattern:
 
 ```python
-def test_weibull_decay_computes_retention_accurately():
+def test_redistribute_weights_moves_dense_mass_to_active_signals():
     # Arrange
-    elapsed_hours = 72.0
-    importance = 5
-    lambda_h = 72.0
-    beta = 0.65
-    floor = 0.05
+    weights = {"ast": 0.35, "bm25": 0.25, "dense": 0.30, "temporal": 0.10}
 
     # Act
-    retention = compute_weibull_retention(
-        delta_hours=elapsed_hours,
-        importance=importance,
-        lambda_h=lambda_h,
-        beta=beta,
-        floor=floor,
-    )
+    result = redistribute_weights(weights, inactive_keys=["dense"])
 
     # Assert
-    assert floor <= retention <= 1.0
+    assert result["dense"] == 0.0
+    assert abs(sum(result.values()) - 1.0) < 1e-9
 ```
 
 ### Test Naming Conventions

@@ -22,8 +22,7 @@ from qdrant_client import models as qmodels
 
 from kortext._env import get_env, get_falkordb_symbols_graph, get_qdrant_collection
 from kortext.chunking.token_utils import count_tokens
-from kortext.retrieval.fusion import apply_knapsack_mmr
-from kortext.retrieval.knee_trimmer import extract_passage_text
+from kortext.retrieval.fusion import apply_knapsack_mmr, extract_passage_text
 from kortext.retrieval.query_parser import (
     is_ci_mode,
     is_file_in_workspace,
@@ -312,7 +311,7 @@ async def fetch_tier2_episodic(
     budget: int,
     max_facts: int,
 ) -> List[str]:
-    """Retrieves episodic memory facts, active learned instincts, and grounded invariants (Tier 2) with Knapsack MMR diversity."""
+    """Retrieves episodic memory facts and grounded invariants (Tier 2) with Knapsack MMR diversity."""
     try:
         raw_facts = list(
             await episodic_search_func(
@@ -320,24 +319,6 @@ async def fetch_tier2_episodic(
             )
             or []
         )
-
-        # Surface matching high-confidence instincts from InstinctStore (closing the continuous learning loop)
-        try:
-            from kortext.trust.instincts import InstinctStore
-
-            q_tokens = [t for t in re.split(r"\W+", query.lower()) if len(t) >= 3]
-            active_instincts = InstinctStore().get_active_instincts(min_confidence=0.65, project=project)
-            for inst in active_instincts[:10]:
-                pat = str(inst.get("pattern") or "")
-                act = str(inst.get("action") or "")
-                dom = str(inst.get("domain") or "general")
-                combined_lower = f"{dom} {pat} {act}".lower()
-                if not q_tokens or any(tok in combined_lower for tok in q_tokens):
-                    inst_line = f"[Instinct:{dom} (conf={inst.get('confidence', 0.7)})] {pat} -> {act}"
-                    if inst_line not in raw_facts:
-                        raw_facts.append(inst_line)
-        except Exception as inst_exc:
-            logger.debug(f"[Tier 2/Instincts] Lookup skipped: {inst_exc}")
 
         # Surface matching AST-grounded invariants from journal/grounded_invariants.json
         try:

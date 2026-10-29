@@ -178,6 +178,9 @@ class SCIPImporter:
             except Exception:
                 base_dir = None
 
+        # shortcut: a relationship to a symbol defined in a later document falls back to its SCIP id;
+        # collect relationships across documents first if forward references turn out to matter.
+        def_qname_by_scip_id: Dict[str, str] = {}
         for doc in index.documents:
             raw_rel_path = doc.relative_path
             if not raw_rel_path:
@@ -242,6 +245,8 @@ class SCIPImporter:
                 is_def = bool(roles & scip_pb2.SymbolRole.Definition)
                 is_imp = bool(roles & scip_pb2.SymbolRole.Import)
                 qname = f"{file_path}::{parent + '.' if parent else ''}{name}" if is_def else (s_id or name)
+                if is_def:
+                    def_qname_by_scip_id[s_id] = qname
 
                 doc_symbols[qname] = {
                     "qname": qname,
@@ -331,30 +336,32 @@ class SCIPImporter:
                 for rel in info.get("relationships", []):
                     target_id = rel.symbol
                     target_name = parse_scip_symbol_name(target_id)
+                    s1_q = def_qname_by_scip_id.get(s_id, s_id)
+                    s2_q = def_qname_by_scip_id.get(target_id, target_id)
                     if rel.is_implementation:
-                        impl_rels.append({"s1": s_name, "s1_id": s_id, "s2": target_name, "scip_id": target_id})
+                        impl_rels.append({"s1": s_name, "s1_q": s1_q, "s2": target_name, "s2_q": s2_q, "scip_id": target_id})
                         total_relationships += 1
                     elif rel.is_type_definition:
-                        type_rels.append({"s1": s_name, "s1_id": s_id, "s2": target_name, "scip_id": target_id})
+                        type_rels.append({"s1": s_name, "s1_q": s1_q, "s2": target_name, "s2_q": s2_q, "scip_id": target_id})
                         total_relationships += 1
 
             if impl_rels:
                 self._query(
                     "UNWIND $rels AS r "
-                    "MERGE (s1:Symbol {name: r.s1}) "
-                    "SET s1.qualified_name = coalesce(s1.qualified_name, r.s1_id) "
-                    "MERGE (s2:Symbol {name: r.s2}) "
-                    "SET s2.qualified_name = coalesce(s2.qualified_name, r.scip_id) "
+                    "MERGE (s1:Symbol {qualified_name: r.s1_q}) "
+                    "SET s1.name = coalesce(s1.name, r.s1) "
+                    "MERGE (s2:Symbol {qualified_name: r.s2_q}) "
+                    "SET s2.name = coalesce(s2.name, r.s2) "
                     "MERGE (s1)-[:IMPLEMENTS {scip_id: r.scip_id}]->(s2)",
                     {"rels": impl_rels},
                 )
             if type_rels:
                 self._query(
                     "UNWIND $rels AS r "
-                    "MERGE (s1:Symbol {name: r.s1}) "
-                    "SET s1.qualified_name = coalesce(s1.qualified_name, r.s1_id) "
-                    "MERGE (s2:Symbol {name: r.s2}) "
-                    "SET s2.qualified_name = coalesce(s2.qualified_name, r.scip_id) "
+                    "MERGE (s1:Symbol {qualified_name: r.s1_q}) "
+                    "SET s1.name = coalesce(s1.name, r.s1) "
+                    "MERGE (s2:Symbol {qualified_name: r.s2_q}) "
+                    "SET s2.name = coalesce(s2.name, r.s2) "
                     "MERGE (s1)-[:TYPE_OF {scip_id: r.scip_id}]->(s2)",
                     {"rels": type_rels},
                 )

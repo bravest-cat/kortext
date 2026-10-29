@@ -1,6 +1,6 @@
 {
   "display_name": "Kortext Cognitive Dream Consolidation",
-  "description": "Cognitive consolidation, Weibull memory decay sweep, and invariant induction daemon",
+  "description": "Memory consolidation, stale-fact pruning and invariant induction daemon",
   "builtin": "schedule",
   "args": [
     "0 * * * *",

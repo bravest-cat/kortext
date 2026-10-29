@@ -1,6 +1,5 @@
 """
-Unit tests for CognitiveDreamEngine and the Stretched Weibull Retention Decay Model.
-Verifies retention curves, biological floor enforcement (R_min = 0.05), and consolidation mechanics.
+Unit tests for DreamEngine consolidation, pruning and skill distillation.
 """
 
 import uuid
@@ -15,44 +14,13 @@ from kortext.dream import DreamEngine
 class TestDreamConsolidation:
     @pytest.fixture
     def dream_engine(self):
-        return DreamEngine(
-            half_life_hours=72.0,
-            shape_parameter=0.65,
-            biological_floor=0.05,
-        )
-
-    def test_immediate_retention_is_one(self, dream_engine):
-        """Verifies that newly asserted facts have full retention (1.0)."""
-        retention = dream_engine.compute_retention(elapsed_hours=0.0, importance=5.0)
-        assert pytest.approx(retention, rel=1e-3) == 1.0
-
-    def test_weibull_decay_progression(self, dream_engine):
-        """Verifies that retention drops smoothly over time."""
-        r_24h = dream_engine.compute_retention(elapsed_hours=24.0, importance=5.0)
-        r_72h = dream_engine.compute_retention(elapsed_hours=72.0, importance=5.0)
-        r_200h = dream_engine.compute_retention(elapsed_hours=200.0, importance=5.0)
-
-        assert 1.0 > r_24h > r_72h > r_200h
-
-    def test_biological_floor_protection(self, dream_engine):
-        """Verifies that memories never drop below the biological retention floor (0.05)."""
-        # Even after 100,000 hours (over 11 years), retention cannot drop to 0
-        r_extreme = dream_engine.compute_retention(elapsed_hours=100000.0, importance=1.0)
-        assert r_extreme == 0.05
-
-    def test_importance_scaling(self, dream_engine):
-        """Verifies that high-importance facts (S=10) decay significantly slower than low-importance facts (S=1)."""
-        r_low = dream_engine.compute_retention(elapsed_hours=100.0, importance=1.0)
-        r_high = dream_engine.compute_retention(elapsed_hours=100.0, importance=10.0)
-
-        assert r_high > r_low
+        return DreamEngine()
 
     @pytest.mark.asyncio
     async def test_dream_cycle_emits_logs_without_polluting_stdout(self, dream_engine, monkeypatch, capsys, caplog, tmp_path):
         """Verifies run_dream_cycle uses standard logger and does not pollute stdout (FastMCP stdio safety)."""
         import logging
 
-        monkeypatch.setattr(dream_engine, "sweep_weibull_decay", lambda dry_run=False: 0)
         async def mock_prune(*args, **kwargs):
             return {"superseded_count": 0, "archived_count": 0, "active_count": 0, "details": [], "contradictions": []}
         async def mock_cluster(*args, **kwargs):
@@ -129,6 +97,7 @@ class TestDreamConsolidation:
         text = expected_file.read_text(encoding="utf-8")
         assert f"name: {skill_name}" in text
 
+    @pytest.mark.usefixtures("real_falkordb")
     def test_consolidate_facts_creates_macro_and_supersedes_candidates(self, dream_engine):
         """Verifies consolidate_facts creates macro-truth fact and marks candidates as superseded/dormant."""
         import uuid
@@ -190,7 +159,6 @@ class TestDreamConsolidation:
         test_db = f"test_dream_cycle_{uuid.uuid4().hex[:6]}"
         dream_engine.episodic_db = test_db
 
-        monkeypatch.setattr(dream_engine, "sweep_weibull_decay", lambda dry_run=False: 0)
         async def mock_prune(*args, **kwargs):
             return {"superseded_count": 0, "archived_count": 0, "active_count": 0, "details": [], "contradictions": []}
         async def mock_cluster(*args, **kwargs):
@@ -301,7 +269,6 @@ class TestDreamConsolidation:
     @pytest.mark.asyncio
     async def test_dream_cycle_dry_run_does_not_persist_or_mutate(self, dream_engine, monkeypatch, tmp_path):
         """Verifies run_dream_cycle in dry-run mode returns dry-run summary and leaves disk pristine."""
-        monkeypatch.setattr(dream_engine, "sweep_weibull_decay", lambda dry_run=False: 0)
         async def mock_prune(*args, **kwargs):
             return {"superseded_count": 0, "archived_count": 0, "active_count": 0, "details": [], "contradictions": []}
         async def mock_cluster(*args, **kwargs):
@@ -333,50 +300,11 @@ class TestDreamConsolidation:
         assert not (tmp_path / "journal").exists()
         assert not (tmp_path / ".agents").exists()
 
-    def test_sweep_weibull_decay_marks_decayed_facts_dormant(self, dream_engine):
-        """Verifies sweep_weibull_decay evaluates retention decay and sets r.dormant = true in FalkorDB."""
-        test_db = f"test_weibull_sweep_{uuid.uuid4().hex[:6]}"
-        dream_engine.episodic_db = test_db
-
-        try:
-            # Seed 1 old fact (10,000 hours ago, importance 1.0) and 1 recent fact (now, importance 8.0)
-            old_time = (datetime.now(timezone.utc) - timedelta(hours=10000)).isoformat()
-            now_time = datetime.now(timezone.utc).isoformat()
-
-            dream_engine._query(
-                test_db,
-                "MERGE (s:Entity {name: 'DecayNodeA'}) MERGE (t:Entity {name: 'DecayNodeB'}) "
-                "CREATE (s)-[r1:RELATES_TO {id: 'fact_decay_old', fact: 'Old fact', importance: 1.0, created_at: $old_time}]->(t) "
-                "CREATE (s)-[r2:RELATES_TO {id: 'fact_recent', fact: 'Recent fact', importance: 8.0, created_at: $now_time}]->(t)",
-                {"old_time": old_time, "now_time": now_time},
-            )
-
-            dormant_count = dream_engine.sweep_weibull_decay(dry_run=False)
-            assert dormant_count == 1
-
-            rows = dream_engine._query(
-                test_db,
-                "MATCH ()-[r:RELATES_TO]->() WHERE r.id IN ['fact_decay_old', 'fact_recent'] "
-                "RETURN r.id, r.dormant ORDER BY r.id",
-            )
-            assert len(rows[1]) == 2
-            # fact_decay_old should be dormant
-            assert rows[1][0][0] == "fact_decay_old"
-            assert rows[1][0][1] in (True, "true")
-            # fact_recent should not be dormant
-            assert rows[1][1][0] == "fact_recent"
-            assert rows[1][1][1] in (False, "false", None)
-        finally:
-            try:
-                dream_engine._get_client().execute_command("GRAPH.DELETE", test_db)
-            except Exception:
-                pass
-
+    @pytest.mark.usefixtures("real_falkordb")
     @pytest.mark.asyncio
     async def test_run_dream_cycle_all_five_phases_populated(self, dream_engine, monkeypatch, tmp_path):
         """
         Verifies end-to-end run_dream_cycle() with all 5 phases fully populated:
-        - Phase 0: Weibull retention decay sweep
         - Phase 1: Synaptic pruning & stale fact archiving
         - Phase 2: Louvain architectural subsystem clustering
         - Phase 3: Abstract invariant induction & AST drift audit
@@ -387,7 +315,7 @@ class TestDreamConsolidation:
         test_db = f"test_dream_all_phases_{uuid.uuid4().hex[:6]}"
         dream_engine.episodic_db = test_db
 
-        # Seed micro-facts for Phase 4 consolidation and an old fact for Phase 0 decay
+        # Seed micro-facts for Phase 4 consolidation and an old fact
         old_time = (datetime.now(timezone.utc) - timedelta(hours=8000)).isoformat()
         dream_engine._query(
             test_db,
@@ -490,8 +418,6 @@ class TestDreamConsolidation:
             assert res["status"] == "ok"
             assert res["duration_seconds"] >= 0.0
 
-            # 1. Phase 0 verification: Weibull decay sweep populated
-            assert res["weibull_dormant_count"] >= 1
 
             # 2. Phase 1 verification: Synaptic pruning populated
             assert res["superseded_count"] == 2
@@ -594,7 +520,6 @@ class TestDreamConsolidation:
         monkeypatch.setattr("kortext.dream.DREAMS_DIR", custom_dreams)
         monkeypatch.setattr("kortext.dream.REPORTS_DIR", custom_reports)
 
-        monkeypatch.setattr(dream_engine, "sweep_weibull_decay", lambda dry_run=False: 0)
         async def mock_prune(*args, **kwargs):
             return {"superseded_count": 0, "archived_count": 0, "active_count": 0, "details": [], "contradictions": []}
         async def mock_cluster(*args, **kwargs):
@@ -619,6 +544,7 @@ class TestDreamConsolidation:
         assert res["dream_report_path"] == str(dream_files[0])
         assert res["reports_path"] == str(report_files[0])
 
+    @pytest.mark.usefixtures("real_falkordb")
     def test_fact_consolidation_flags_all_superseded_micro_facts(self, dream_engine):
         """Verifies that every candidate micro-fact receives r.superseded = true and r.dormant = true upon consolidation."""
         test_db = f"test_micro_flags_{uuid.uuid4().hex[:6]}"
@@ -629,9 +555,9 @@ class TestDreamConsolidation:
             dream_engine._query(
                 test_db,
                 "MERGE (s:Entity {name: 'AuthService'}) MERGE (t:Entity {name: 'TokenService'}) "
-                "CREATE (s)-[:RELATES_TO {id: 'm_fact_1', fact: 'JWT validation in gateway'}]->(t) "
-                "CREATE (s)-[:RELATES_TO {id: 'm_fact_2', fact: 'Token refresh on 401'}]->(t) "
-                "CREATE (s)-[:RELATES_TO {id: 'm_fact_3', fact: 'Session blacklisting via Redis'}]->(t)",
+                "CREATE (s)-[:RELATES_TO {id: 'm_fact_1', project: 'security_subsystem', fact: 'JWT validation in gateway'}]->(t) "
+                "CREATE (s)-[:RELATES_TO {id: 'm_fact_2', project: 'security_subsystem', fact: 'Token refresh on 401'}]->(t) "
+                "CREATE (s)-[:RELATES_TO {id: 'm_fact_3', project: 'security_subsystem', fact: 'Session blacklisting via Redis'}]->(t)",
             )
 
             res = dream_engine.consolidate_facts(
@@ -748,7 +674,6 @@ class TestDreamConsolidation:
         test_db = f"test_dream_staged_{uuid.uuid4().hex[:6]}"
         dream_engine.episodic_db = test_db
 
-        monkeypatch.setattr(dream_engine, "sweep_weibull_decay", lambda dry_run=False: 0)
         async def mock_cluster(*args, **kwargs):
             return []
         async def mock_induce(*args, **kwargs):

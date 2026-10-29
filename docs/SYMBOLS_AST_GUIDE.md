@@ -84,7 +84,7 @@ result = await seek_symbol(symbol_name="RetrievalEngine")
   "start_line": 42,
   "end_line": 218,
   "signature": "class RetrievalEngine(DenseEmbedderProtocol)",
-  "docstring": "Federated multi-tier retrieval orchestrator supporting RRF and HippoRAG.",
+  "docstring": "Federated multi-tier retrieval orchestrator supporting RRF.",
   "immediate_callers": ["federated_query", "search_knowledge_and_memory"],
   "immediate_callees": ["_fetch_tier0", "_fetch_tier1", "_fetch_tier2"]
 }

@@ -236,18 +236,24 @@ class IngestCache:
             return out
 
     def purge_missing_files(
-        self, collection: str, current_files: Set[str]
+        self, collection: str, current_files: Set[str], root: Optional[str] = None
     ) -> List[Tuple[str, List[str]]]:
         """
-        Compare collection cache against current existing files on disk.
-        Purges missing files from cache and returns list of (file_path, point_ids) to delete from vector store.
+        Purges cache entries for files that are gone from disk, and, when `root` is given, for files
+        under `root` that this ingest no longer indexes (excluded, ignored or renamed). Entries outside
+        `root` belong to other ingests into the same collection and stay.
+        Returns (file_path, point_ids) pairs to delete from the vector store.
         """
         resolved_current = {str(Path(f).resolve()) for f in current_files}
+        root_path = Path(root).resolve() if root else None
         cached_files = self.get_all_cached_files(collection)
         purged = []
         with self._get_connection() as conn:
             for file_path, point_ids in cached_files.items():
-                if file_path not in resolved_current and not Path(file_path).exists():
+                if file_path in resolved_current:
+                    continue
+                left_root = root_path is not None and Path(file_path).is_relative_to(root_path)
+                if left_root or not Path(file_path).exists():
                     conn.execute(
                         "DELETE FROM file_cache WHERE file_path = ? AND collection = ?",
                         (file_path, collection),

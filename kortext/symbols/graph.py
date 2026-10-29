@@ -271,9 +271,13 @@ class SymbolGraphManager(SymbolGraphTraversalMixin):
                 "WITH f "
                 "UNWIND $references AS r "
                 "OPTIONAL MATCH (existing:Symbol {name: r.name})-[:DEFINED_IN]->() "
+                "WITH f, r, collect(DISTINCT existing.qualified_name) AS defs "
+                # An unqualified call binds to a definition only when the name is unambiguous;
+                # otherwise it gets an unresolved stub instead of a CALLS edge to every homonym.
                 "WITH f, r, CASE "
                 "  WHEN r.is_local_or_imp THEN r.target_qualified "
-                "  ELSE coalesce(existing.qualified_name, r.target_qualified) "
+                "  WHEN size(defs) = 1 THEN defs[0] "
+                "  ELSE r.target_qualified "
                 "END AS final_qname "
                 "MERGE (s:Symbol {qualified_name: final_qname}) "
                 "SET s.name = coalesce(s.name, r.name) "

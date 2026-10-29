@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 
 from kortext.falkordb_client import get_shared_falkordb_client
-from kortext.retrieval.hipporag import HippoRAGPPR
 from kortext.retrieval.qdrant_engine import EmbeddedQdrantEngine
 from kortext.symbols.graph import SymbolGraphManager
 from kortext.symbols.seek import SymbolSeekEngine
@@ -74,25 +73,6 @@ def test_benchmark_trace_impact_latency(benchmark_store):
     assert p95_impact < 25.0, f"trace_symbol_impact p95 too slow: {p95_impact:.2f} ms"
 
 
-def test_benchmark_hipporag_ppr_latency(benchmark_store):
-    """Benchmark 2.3: HippoRAG PPR Power Iteration Latency."""
-    ppr_engine = HippoRAGPPR()
-    for _ in range(3):
-        ppr_engine.retrieve_associative_subgraph(["RetrievalEngine"], graph_name="kortext_symbols")
-
-    ppr_times = []
-    for _ in range(25):
-        t0 = time.perf_counter()
-        ppr_engine.retrieve_associative_subgraph(["RetrievalEngine"], graph_name="kortext_symbols")
-        ppr_times.append((time.perf_counter() - t0) * 1000.0)
-
-    p50_ppr = float(np.percentile(ppr_times, 50))
-    p95_ppr = float(np.percentile(ppr_times, 95))
-    benchmark_store["memory_retention"]["MR-5_hipporag_ppr_p95_ms"] = f"{p95_ppr:.2f}ms"
-    assert p50_ppr < 15.0, f"HippoRAG PPR p50 too slow: {p50_ppr:.2f} ms"
-    assert p95_ppr < 35.0, f"HippoRAG PPR p95 too slow: {p95_ppr:.2f} ms"
-
-
 def test_benchmark_embedded_qdrant_latency():
     """Benchmark 2.4: Embedded Qdrant query_points Latency."""
     qdrant_engine = EmbeddedQdrantEngine()
@@ -142,6 +122,7 @@ def test_benchmark_minja_defense():
     assert blocked == len(payloads)
 
 
+@pytest.mark.usefixtures("real_falkordb")
 def test_benchmark_task_dag_continuity():
     """Benchmark 6: Task DAG Continuity, In-Progress Tracking, Overlap Detection & Lease Recovery."""
     tracker = TaskDAGTracker()
@@ -153,8 +134,7 @@ def test_benchmark_task_dag_continuity():
     try:
         # Verify detect_file_overlaps against live FalkorDB
         overlap = tracker.detect_file_overlaps(["kortext/a.py"], project_id=proj, exclude_task_id=t1)
-        assert overlap["recommended_workspace_mode"] == "branch"
-        assert any(o["task_id"] == t2 for o in overlap["overlapping_tasks"])
+        assert overlap["recommended_workspace_mode"] == "shared"  # t2 is pending, not active
 
         # Initial: only t1 should be ready
         ready_ids = [t["id"] for t in tracker.get_ready_tasks(project_id=proj)]

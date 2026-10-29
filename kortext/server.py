@@ -1,6 +1,6 @@
 """
-Kortext FastMCP Server: Main integration point for AI agents and Knowledge OS.
-Exposes tools to Antigravity CLI agents via stdio transport:
+Kortext FastMCP Server. One daemon per machine serves every agy window (see kortext.daemon).
+Tools:
 
   1. search_knowledge_and_memory: federated multi-tier memory and codebase retrieval (read)
   2. record_system_outcome: persist directly to FalkorDB KG and journal (write)
@@ -24,6 +24,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -86,41 +87,88 @@ CATEGORY_DIRS: Dict[str, str] = {
 }
 
 
-async def _consume_invalidation_spool_loop() -> None:
-    """Background consumer draining ~/.kortext/spool/invalidation/event_*.json using sole-custodian Qdrant client."""
+SPOOL_MAX_ATTEMPTS = 5
+
+
+async def _process_spool_event(ev_file: Path, client: Any = None) -> None:
+    """
+    Re-indexes the file an invalidation event names. On success the event is deleted. On failure it
+    stays in the spool with a backoff; after SPOOL_MAX_ATTEMPTS it moves to spool/failed/ and the
+    agent is told on its next turn.
+    """
     from kortext.ingest import index_single_file
 
+    try:
+        payload = json.loads(ev_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.error("Unreadable invalidation event %s moved to spool/failed: %s", ev_file.name, exc)
+        _dead_letter(ev_file, {"path": None, "last_error": f"unreadable event: {exc}"})
+        return
+    if float(payload.get("next_attempt_at") or 0) > time.time():
+        return
+    target_path = payload.get("path")
+    if not target_path or not os.path.isfile(target_path):
+        ev_file.unlink(missing_ok=True)  # the file is gone; nothing to re-index
+        return
+    try:
+        res = await index_single_file(
+            file_path=Path(target_path),
+            collection=payload.get("collection") or os.getenv("QDRANT_COLLECTION", "kortext_codebase"),
+            target_symbols_db=payload.get("symbols_graph") or os.getenv("FALKORDB_SYMBOLS_GRAPH", "kortext_symbols"),
+            client=client,
+            symbol_mgr=symbol_graph,
+            skip_ast_if_sha=payload.get("ast_synced_sha256"),
+        )
+        error = res.get("error") if isinstance(res, dict) and res.get("status") == "error" else None
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    if error is None:
+        ev_file.unlink(missing_ok=True)
+        return
+
+    attempts = int(payload.get("attempts") or 0) + 1
+    payload.update(attempts=attempts, last_error=str(error)[:500], last_attempt_at=time.time())
+    if attempts >= SPOOL_MAX_ATTEMPTS:
+        _dead_letter(ev_file, payload)
+        return
+    payload["next_attempt_at"] = time.time() + min(600, 5 * 2**attempts)
+    logger.warning("Re-index of %s failed (attempt %d/%d), will retry: %s", target_path, attempts, SPOOL_MAX_ATTEMPTS, error)
+    ev_file.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _dead_letter(ev_file: Path, payload: Dict[str, Any]) -> None:
+    failed_dir = ev_file.parent.parent / "failed"
+    failed_dir.mkdir(parents=True, exist_ok=True)
+    (failed_dir / ev_file.name).write_text(json.dumps(payload), encoding="utf-8")
+    ev_file.unlink(missing_ok=True)
+    msg = (
+        f"kortext could not re-index {payload.get('path')} after {payload.get('attempts', 0)} attempts: "
+        f"{payload.get('last_error')}. Search results for that file are stale. "
+        f"Events are kept in {failed_dir}; check_kortext_health lists them."
+    )
+    logger.error(msg)
+    try:
+        from kortext.hooks.pipelines.post_tool import queue_pending_advisory
+
+        queue_pending_advisory(msg)
+    except Exception as exc:
+        logger.warning("Could not queue re-index failure advisory: %s", exc)
+
+
+async def _consume_invalidation_spool_loop() -> None:
+    """Drains ~/.kortext/spool/invalidation/event_*.json using the daemon's Qdrant client."""
     spool_dir = get_kortext_home() / "spool" / "invalidation"
     while True:
         try:
             await asyncio.sleep(2.0)
             if not spool_dir.is_dir():
                 continue
-            shared_client = getattr(retrieval, "_client", None)
             for ev_file in sorted(spool_dir.glob("event_*.json"))[:25]:
-                try:
-                    payload = json.loads(ev_file.read_text(encoding="utf-8"))
-                    target_path = payload.get("path")
-                    if target_path and os.path.isfile(target_path):
-                        await index_single_file(
-                            file_path=Path(target_path),
-                            collection=payload.get("collection") or os.getenv("QDRANT_COLLECTION", "kortext_codebase"),
-                            target_symbols_db=payload.get("symbols_graph") or os.getenv("FALKORDB_SYMBOLS_GRAPH", "kortext_symbols"),
-                            client=shared_client,
-                            symbol_mgr=symbol_graph,
-                            skip_ast_if_sha=payload.get("ast_synced_sha256"),
-                        )
-                except Exception as exc:
-                    logger.debug("Invalidation spool item %s skipped: %s", ev_file.name, exc)
-                finally:
-                    try:
-                        ev_file.unlink(missing_ok=True)
-                    except OSError:
-                        pass
+                await _process_spool_event(ev_file, getattr(retrieval, "_client", None))
         except asyncio.CancelledError:
             break
         except Exception as loop_exc:
-            logger.debug("Invalidation spool loop error ignored: %s", loop_exc)
+            logger.error("Invalidation spool loop error: %s", loop_exc)
 
 
 @asynccontextmanager
@@ -442,7 +490,7 @@ async def trigger_dream_mode(
         purge_stale:      If True, physically removes superseded facts after archiving. Default False (soft-prune).
         invariants:       Optional list of newly induced architectural invariants: [{'domain': '...', 'rule': '...', 'rationale': '...'}].
         stale_fact_names: Optional list of older fact names to supersede during pruning.
-        consolidations:   Optional list of macro-truth facts to consolidate [{'macro_fact': '...', 'superseded_fact_ids': [...]}]
+        consolidations:   Optional list of macro-truth facts to consolidate [{'macro_fact': '...', 'superseded_fact_ids': [...], 'subject': '...', 'object': '...'}]; subject and object are required when the facts span more than one entity pair
         distilled_skills: Optional list of skills to distill into SKILL.md [{'name': '...', 'description': '...', 'content': '...'}]
         global_skills:    Whether to persist distilled skills globally to ~/.gemini/config/plugins/kortext/skills/ instead of .agents/skills/
     Returns:
@@ -648,7 +696,7 @@ async def list_vector_collections() -> Dict[str, Any]:
 @mcp.tool(
     description=(
         "Check the health of all Kortext backend services. Returns a JSON status "
-        "report for Qdrant, FalkorDB, the inference server (embeddings/reranker), and the dashboard. "
+        "report for Qdrant, FalkorDB, the embedding server, and the dashboard. "
         "Call this if other Kortext tools return errors or time out."
     ),
     meta={"antigravity/alwaysLoad": False},
@@ -799,9 +847,11 @@ async def manage_tasks(
     tests_passed: Optional[bool] = None,
     base_commit: Optional[str] = None,
     milestone_name: Optional[str] = None,
+    reviewer_output: Optional[str] = None,
+    token_budget_spent: Optional[int] = None,
     ctx: Optional[Context] = None,
 ) -> str:
-    """Manage Task DAG: create (single or batch `tasks`), get_ready, claim, complete_task, milestone_handoff, update_status, list_all."""
+    """Manage Task DAG: create (single or batch `tasks`), get_ready, claim, claim_files (exclusive file ownership for an in_progress task), heartbeat, complete_task, milestone_handoff, update_status, list_all."""
     resolved_target_files = target_files if target_files is not None else files_to_modify
 
     def _do_manage() -> str:
@@ -813,7 +863,8 @@ async def manage_tasks(
             episode_name=episode_name, tasks=tasks, target_files=resolved_target_files,
             modified_files=modified_files, test_command=test_command,
             tests_passed=tests_passed, base_commit=base_commit,
-            milestone_name=milestone_name,
+            milestone_name=milestone_name, reviewer_output=reviewer_output,
+            token_budget_spent=token_budget_spent,
         )
 
     return await asyncio.to_thread(_do_manage)
@@ -994,17 +1045,6 @@ async def boost_prompt_context(
         except Exception:
             pass
 
-        instincts_summary: List[str] = []
-        try:
-            from kortext.trust.instincts import InstinctStore
-
-            for inst in InstinctStore().get_active_instincts(min_confidence=0.65, project=resolved_proj)[:3]:
-                instincts_summary.append(
-                    f"[{inst.get('domain', 'general')}] {inst.get('pattern', '')} -> {inst.get('action', '')}"
-                )
-        except Exception:
-            pass
-
         ws_path = Path(effective_ws) if effective_ws else KORTEXT_ROOT
         if (ws_path / "Cargo.toml").is_file():
             verify_cmd = "cargo test"
@@ -1031,10 +1071,6 @@ async def boost_prompt_context(
             md_lines.append("\n## Active Grounded Invariants")
             for inv_s in invariants_summary[:3]:
                 md_lines.append(f"- {inv_s}")
-        if instincts_summary:
-            md_lines.append("\n## Learned Project Instincts")
-            for inst_s in instincts_summary[:3]:
-                md_lines.append(f"- {inst_s}")
         md_lines.append(
             f"\n## Execution & Verification\n"
             f"- Recommended Pattern: `{routing['recommended_pattern']}` (workspace: `{routing['recommended_workspace_mode']}`)\n"
@@ -1050,7 +1086,6 @@ async def boost_prompt_context(
             "blast_radius_callers": callers_summary,
             "execution_routing": routing,
             "active_invariants": invariants_summary,
-            "active_instincts": instincts_summary,
             "verification_command": verify_cmd,
         }
         return json.dumps(brief, separators=(",", ":"))
@@ -1059,7 +1094,22 @@ async def boost_prompt_context(
 
 
 def main():
-    """Starts the FastMCP stdio server allowing normal asyncio lifespan teardown on termination."""
+    """
+    `kortext-server` (what agy launches): stdio proxy to the shared daemon, starting it if needed.
+    `kortext-server --daemon`: the daemon itself. KORTEXT_SERVER_MODE=inprocess serves stdio directly,
+    which is also the fallback when the daemon cannot start.
+    """
+    import sys
+
+    from kortext import daemon
+
+    if "--daemon" in sys.argv[1:]:
+        daemon.serve(mcp)
+        return
+    if os.getenv("KORTEXT_SERVER_MODE", "").strip().lower() != "inprocess":
+        if daemon.run_proxy():
+            return
+        sys.stderr.write("kortext: daemon unavailable, serving this window in-process\n")
     mcp.run(transport="stdio")
 
 

@@ -358,11 +358,20 @@ def stop_substrates(base_dir: Optional[Path] = None) -> Tuple[bool, str]:
                     subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
                 else:
                     os.kill(pid, signal.SIGTERM)
-                    time.sleep(0.2)
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        logger.debug("Suppressed non-fatal exception")
+                    # Give FalkorDB and Qdrant up to 5 s to flush to disk before forcing it.
+                    deadline = time.monotonic() + 5.0
+                    while time.monotonic() < deadline:
+                        try:
+                            os.kill(pid, 0)
+                        except ProcessLookupError:
+                            break
+                        time.sleep(0.1)
+                    else:
+                        logger.warning("%s (PID %d) ignored SIGTERM for 5 s; sending SIGKILL", name, pid)
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
                 stopped.append(name)
             except Exception as exc:
                 logger.debug("Could not terminate %s PID: %s", name, exc)

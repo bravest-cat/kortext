@@ -152,9 +152,8 @@ def cmd_dream(args):
 
 def cmd_ingest(args):
     """Batch AST Ingestion."""
-    from kortext.ingest import ingest
-    target_dir = args.root or os.getcwd()
-    asyncio.run(ingest(root=target_dir, force=args.force))
+    from kortext.ingest import run_cli_ingest
+    run_cli_ingest(args.root or os.getcwd(), force=args.force)
 
 
 def cmd_server(args):

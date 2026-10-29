@@ -242,13 +242,11 @@ def install_plugin():
     synced_env = {
         "WORKSPACE_ROOTS": dotenv_vals.get("WORKSPACE_ROOTS", str(KORTEXT_ROOT)),
         "LOCAL_LLM_BASE_URL": dotenv_vals.get("LOCAL_LLM_BASE_URL", "http://127.0.0.1:8000/v1"),
-        "RERANK_BASE_URL": dotenv_vals.get("RERANK_BASE_URL", "http://127.0.0.1:8000/v1"),
         "EMBED_MODEL_NAME": dotenv_vals.get(
             "EMBED_MODEL_NAME",
             "mlx-community--Qwen3-Embedding-8B-4bit-DWQ" if embed_base else "BAAI/bge-small-en-v1.5",
         ),
-        "RERANK_MODEL_NAME": dotenv_vals.get("RERANK_MODEL_NAME", "vserifsaglam--Qwen3-Reranker-4B-4bit-MLX"),
-        "RERANK_TOP_K": dotenv_vals.get("RERANK_TOP_K", "5"),
+        "RETRIEVE_RESULTS": dotenv_vals.get("RETRIEVE_RESULTS", "5"),
         "RETRIEVE_TOP_K": dotenv_vals.get("RETRIEVE_TOP_K", "30"),
         "FALKORDB_HOST": dotenv_vals.get("FALKORDB_HOST", "127.0.0.1"),
         "FALKORDB_PORT": dotenv_vals.get("FALKORDB_PORT", "6379"),

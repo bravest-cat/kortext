@@ -19,7 +19,6 @@ from kortext.retrieval.engine import (
     W_AST,
     W_BM25,
     W_DENSE,
-    W_HIPPO,
     W_TEMPORAL,
     K_RRF,
 )
@@ -78,12 +77,11 @@ class TestQueryClassification:
 
 class TestAdaptiveWeights:
     def test_default_fusion_weights_structure_and_sum(self):
-        expected_keys = {"ast", "bm25", "dense", "hippo", "temporal"}
+        expected_keys = {"ast", "bm25", "dense", "temporal"}
         assert set(DEFAULT_FUSION_WEIGHTS.keys()) == expected_keys
         assert DEFAULT_FUSION_WEIGHTS["ast"] == W_AST
         assert DEFAULT_FUSION_WEIGHTS["bm25"] == W_BM25
         assert DEFAULT_FUSION_WEIGHTS["dense"] == W_DENSE
-        assert DEFAULT_FUSION_WEIGHTS["hippo"] == W_HIPPO
         assert DEFAULT_FUSION_WEIGHTS["temporal"] == W_TEMPORAL
         assert pytest.approx(sum(DEFAULT_FUSION_WEIGHTS.values())) == 1.0
 
@@ -98,15 +96,13 @@ class TestAdaptiveWeights:
         assert weights["bm25"] >= DEFAULT_FUSION_WEIGHTS["bm25"]
         assert pytest.approx(sum(weights.values())) == 1.0
 
-    def test_prose_query_elevates_hippo_and_dense(self):
+    def test_prose_query_elevates_dense_and_facts(self):
         weights = compute_adaptive_weights(
             "explain the architecture of cognitive memory and forgetting",
             ci_mode=False,
             dense_available=True,
         )
-        # HippoRAG elevated above default 0.15
-        assert weights["hippo"] > DEFAULT_FUSION_WEIGHTS["hippo"]
-        # Dense semantic elevated above default 0.25
+        assert weights["temporal"] > DEFAULT_FUSION_WEIGHTS["temporal"]
         assert weights["dense"] > DEFAULT_FUSION_WEIGHTS["dense"]
         # AST is de-emphasized compared to default
         assert weights["ast"] < DEFAULT_FUSION_WEIGHTS["ast"]
@@ -115,39 +111,22 @@ class TestAdaptiveWeights:
 
 class TestCIRedistribution:
     def test_proportional_redistribution_preserves_relative_ratios(self):
-        base_weights = {
-            "ast": 0.30,
-            "bm25": 0.20,
-            "dense": 0.25,
-            "hippo": 0.15,
-            "temporal": 0.10,
-        }
+        base_weights = {"ast": 0.30, "bm25": 0.20, "dense": 0.25, "temporal": 0.25}
         redistributed = redistribute_weights(base_weights, inactive_keys=["dense"])
         assert redistributed["dense"] == 0.0
 
-        # Ratios among active modalities must be exactly preserved
-        # ast / bm25 ratio: 0.30 / 0.20 = 1.5
         assert pytest.approx(redistributed["ast"] / redistributed["bm25"]) == 1.5
-        # hippo / temporal ratio: 0.15 / 0.10 = 1.5
-        assert pytest.approx(redistributed["hippo"] / redistributed["temporal"]) == 1.5
-        # ast / hippo ratio: 0.30 / 0.15 = 2.0
-        assert pytest.approx(redistributed["ast"] / redistributed["hippo"]) == 2.0
+        assert pytest.approx(redistributed["ast"] / redistributed["temporal"]) == 1.2
 
         # Total sum must equal 1.0
         assert pytest.approx(sum(redistributed.values())) == 1.0
-        # Active weights:
-        # ast: 0.30 / 0.75 = 0.40
-        # bm25: 0.20 / 0.75 = 0.2667
-        # hippo: 0.15 / 0.75 = 0.20
-        # temporal: 0.10 / 0.75 = 0.1333
         assert pytest.approx(redistributed["ast"]) == 0.40
-        assert pytest.approx(redistributed["hippo"]) == 0.20
 
     def test_redistribute_ci_weights_helper(self):
         res = redistribute_ci_weights()
         assert res["dense"] == 0.0
         assert pytest.approx(sum(res.values())) == 1.0
-        assert pytest.approx(res["ast"]) == 0.40
+        assert pytest.approx(res["ast"]) == 0.50
 
     def test_ci_mode_env_var_triggers_redistribution(self):
         with patch.dict(os.environ, {"KORTEXT_CI_MODE": "1", "CI_MODE": "1"}):
@@ -177,7 +156,7 @@ class TestCIRedistribution:
             "explain memory consolidation", dense_available=True, ci_mode=True
         )
         assert w_prose_ci["dense"] == 0.0
-        assert w_prose_ci["hippo"] > 0.30
+        assert w_prose_ci["temporal"] > 0.30
         assert pytest.approx(sum(w_prose_ci.values())) == 1.0
 
 
@@ -195,19 +174,18 @@ class TestRetrievalEngineQueryIntegration:
                 with patch.object(engine, "_get_query_embedding", AsyncMock(return_value=[0.1, 0.2])):
                     with patch.object(engine, "_get_sparse_embedding", return_value=([1], [0.5])):
                         with patch.object(engine, "_fetch_ast_matches", return_value=["ast_match"]):
-                            with patch.object(engine, "_fetch_hippo_subgraph", return_value=["hippo_match"]):
-                                with patch.object(engine, "_fetch_temporal_facts", return_value=["temporal_match"]):
-                                    with patch.object(engine, "_retrieve_qdrant_points", AsyncMock(return_value=["dense_match"])):
-                                        with patch.object(engine, "_retrieve_qdrant_sparse_points", AsyncMock(return_value=["sparse_match"])):
-                                            with patch.object(engine, "_rank_candidates", wraps=engine._rank_candidates) as spy_rank:
-                                                results = await engine.query("where is foo_bar defined?")
-                                                assert len(results) > 0
-                                                # Verify _rank_candidates was called with elevated AST weight
-                                                assert spy_rank.called
-                                                signals = spy_rank.call_args[0][0]
-                                                ast_weight = signals[0][1]
-                                                # AST weight for symbolic query is >= 0.35
-                                                assert ast_weight >= 0.35
+                            with patch.object(engine, "_fetch_temporal_facts", return_value=["temporal_match"]):
+                                with patch.object(engine, "_retrieve_qdrant_points", AsyncMock(return_value=["dense_match"])):
+                                    with patch.object(engine, "_retrieve_qdrant_sparse_points", AsyncMock(return_value=["sparse_match"])):
+                                        with patch.object(engine, "_rank_candidates", wraps=engine._rank_candidates) as spy_rank:
+                                            results = await engine.query("where is foo_bar defined?")
+                                            assert len(results) > 0
+                                            # Verify _rank_candidates was called with elevated AST weight
+                                            assert spy_rank.called
+                                            signals = spy_rank.call_args[0][0]
+                                            ast_weight = signals[0][1]
+                                            # AST weight for symbolic query is >= 0.35
+                                            assert ast_weight >= 0.35
 
         asyncio.run(_run())
 
@@ -224,21 +202,20 @@ class TestRetrievalEngineQueryIntegration:
                     with patch.object(engine, "_get_query_embedding", AsyncMock(return_value=[])):
                         with patch.object(engine, "_get_sparse_embedding", return_value=([1], [0.5])):
                             with patch.object(engine, "_fetch_ast_matches", return_value=["ast_match"]):
-                                with patch.object(engine, "_fetch_hippo_subgraph", return_value=["hippo_match"]):
-                                    with patch.object(engine, "_fetch_temporal_facts", return_value=["temporal_match"]):
-                                        with patch.object(engine, "_retrieve_qdrant_points", AsyncMock(return_value=[])):
-                                            with patch.object(engine, "_retrieve_qdrant_sparse_points", AsyncMock(return_value=["sparse_match"])):
-                                                with patch.object(engine, "_rank_candidates", wraps=engine._rank_candidates) as spy_rank:
-                                                    results = await engine.query("where is foo_bar defined?")
-                                                    assert spy_rank.called
-                                                    signals = spy_rank.call_args[0][0]
-                                                    # Signal 2 is dense (index 2)
-                                                    dense_weight = signals[2][1]
-                                                    assert dense_weight == 0.0
-                                                    # AST weight has received redistributed mass
-                                                    ast_weight = signals[0][1]
-                                                    assert ast_weight > 0.40
-                                                    total_weight = sum(w for _, w in signals)
-                                                    assert pytest.approx(total_weight) == 1.0
+                                with patch.object(engine, "_fetch_temporal_facts", return_value=["temporal_match"]):
+                                    with patch.object(engine, "_retrieve_qdrant_points", AsyncMock(return_value=[])):
+                                        with patch.object(engine, "_retrieve_qdrant_sparse_points", AsyncMock(return_value=["sparse_match"])):
+                                            with patch.object(engine, "_rank_candidates", wraps=engine._rank_candidates) as spy_rank:
+                                                results = await engine.query("where is foo_bar defined?")
+                                                assert spy_rank.called
+                                                signals = spy_rank.call_args[0][0]
+                                                # Signal 2 is dense (index 2)
+                                                dense_weight = signals[2][1]
+                                                assert dense_weight == 0.0
+                                                # AST weight has received redistributed mass
+                                                ast_weight = signals[0][1]
+                                                assert ast_weight > 0.40
+                                                total_weight = sum(w for _, w in signals)
+                                                assert pytest.approx(total_weight) == 1.0
 
         asyncio.run(_run())

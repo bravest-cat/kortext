@@ -1,6 +1,6 @@
 # Kortext Hybrid Dream Mode Guide
 
-> **Substrate Automation, Weibull Synaptic Decay, Louvain Community Partitioning, and Cognitive Skill Distillation**
+> **Fact pruning, Louvain community partitioning, invariant drift audit and skill distillation**
 
 ---
 
@@ -10,12 +10,11 @@ In human cognition, sleep serves two essential memory functions:
 1. **Synaptic Homeostasis:** Low-relevance memories and noise are pruned to prevent synaptic overload.
 2. **Memory Consolidation:** Specific episodic memories are integrated into high-level macro-concepts and generalized skills.
 
-Kortext implements a **Hybrid Dream Mode** that bridges fast substrate graph algorithms with high-level LLM reflection across **7 sequential phases** (0 to 6):
+Kortext implements a **Hybrid Dream Mode** that bridges fast substrate graph algorithms with high-level LLM reflection across **6 sequential phases** (1 to 6):
 
 ```mermaid
 flowchart TD
-    Trigger["trigger_dream_mode() / Scheduled Sidecar"] --> Phase0["Phase 0: Weibull Synaptic Decay\nW(t) = exp(-(t/λ)^k)"]
-    Phase0 --> Phase1["Phase 1: Synaptic Pruning\n(Dormancy flags & edge detachment)"]
+    Trigger["trigger_dream_mode() / Scheduled Sidecar"] --> Phase1["Phase 1: Pruning\n(archive superseded facts, dedupe)"]
     Phase1 --> Phase2["Phase 2: Louvain Community Partitioning\n(Subsystem modularity clustering)"]
     Phase2 --> Phase3["Phase 3: Invariant Drift Audit\n(AST Body SHA-256 Grounding)"]
     Phase3 --> Phase4["Phase 4: Fact Consolidation\n(Micro-facts → Macro-truths)"]
@@ -25,23 +24,9 @@ flowchart TD
 
 ---
 
-## 2. Phase 0 & 1: Weibull Synaptic Decay & Pruning
+## 2. Phase 1: Pruning
 
-Unlike naive time-to-live (TTL) caches that discard facts abruptly, Kortext models memory retention using the **stretched-exponential Weibull decay distribution**:
-
-$$R(t) = \max\left(R_{\text{floor}}, \exp\left(-\left(\frac{\Delta t}{\lambda}\right)^k\right)\right)$$
-
-Where:
-- $\Delta t$: Elapsed time in hours since the fact was created or last reinforced.
-- $\lambda = 72.0$: Nominal half-life scale parameter in hours (3-day baseline scaled by $\exp(\text{importance}/10)$).
-- $\beta = 0.65$: Shape parameter (stretched sub-exponential curve modeling biological forgetting).
-- $R_{\text{floor}} = 0.05$: Retention floor ensuring high-trust facts never decay to zero.
-
-### Synaptic Pruning Rules
-When a relationship's retention score $R(t)$ drops below the pruning threshold:
-1. Relationships marked `r.dormant = true` are excluded from standard search traversals.
-2. Facts explicitly superseded by newer decisions (`[:SUPERSEDES]`) are archived.
-3. High-trust architectural invariants (`trust_level="system"`) are immune to decay.
+Facts are never decayed by age. A fact leaves search results only when it is superseded (by `supersedes`, by `consolidate_facts`, or by `delete_fact`) or its `valid_to` has passed. Phase 1 archives superseded facts of the dreaming project to `journal/archive/` before it deletes them, deduplicates near-identical facts, and merges near-duplicate entity names.
 
 ---
 
@@ -79,7 +64,7 @@ Coding sessions frequently record dozens of micro-facts:
 
 In Phase 4, the agent or dream engine merges these micro-facts into a single **Macro-Truth**:
 - **Macro-Truth:** *"FalkorDB operates on UDS socket ~/.kortext/run/falkordb.sock with loopback TCP 6379 fallback."*
-- **Supersession:** Granular micro-facts are updated in FalkorDB with `SET r.superseded = true, r.dormant = true, r.superseded_by = $macro_fact_id`.
+- **Supersession:** Granular micro-facts are updated in FalkorDB with `SET r.superseded = true, r.dormant = true, r.superseded_by = $macro_fact_id`. When the superseded facts span more than one (subject, object) pair, the item must name `subject` and `object`; otherwise it is skipped.
 - Granular facts remain in historical audit logs without cluttering daily retrieval.
 
 ---

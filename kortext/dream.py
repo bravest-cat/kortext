@@ -3,7 +3,7 @@ Dream mode: offline memory reflection, synaptic pruning, and subsystem synthesis
 
 100% Agent-Native:
 - Contradiction auditing and invariant induction are driven directly by the frontier Antigravity agent.
-- Zero local LLM chat completion dependencies on :8000 (reserving Metal GPU for embeddings & reranking).
+- No local LLM calls.
 - Louvain Subsystem Community Detection is fully deterministic and runs in <5ms.
 - Synaptic pruning archives superseded FalkorDB nodes and RELATES_TO edges into markdown and purges them.
 
@@ -19,7 +19,6 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
-import math
 import os
 from pathlib import Path
 import re
@@ -64,9 +63,6 @@ class DreamEngine:
         password: Optional[str] = FALKORDB_PASS,
         episodic_db: str = FALKORDB_DB,
         symbols_db: str = DEFAULT_SYMBOLS_DB,
-        half_life_hours: float = 72.0,
-        shape_parameter: float = 0.65,
-        biological_floor: float = 0.05,
         client: Optional[FalkorDBClient] = None,
     ):
         self.host = host
@@ -74,9 +70,6 @@ class DreamEngine:
         self.password = password or None
         self.episodic_db = episodic_db
         self.symbols_db = symbols_db
-        self.half_life_hours = half_life_hours
-        self.shape_parameter = shape_parameter
-        self.biological_floor = biological_floor
         self.client = (
             client
             if client is not None
@@ -100,61 +93,6 @@ class DreamEngine:
     def _query(self, db_name: str, cypher: str, params: Optional[Dict[str, Any]] = None) -> List[List[Any]]:
         return self.client.query(db_name, cypher, params)
 
-    def compute_retention(self, elapsed_hours: float, importance: float = 5.0) -> float:
-        """
-        Computes effective retention using the Stretched Weibull Decay Model:
-        R(t) = exp(-(t / (lambda * exp(S / 10)))^beta)
-        Subject to biological retention floor R_min = 0.05.
-        """
-        s_factor = math.exp(float(importance) / 10.0)
-        scale = self.half_life_hours * s_factor
-        t = max(float(elapsed_hours), 0.0)
-        retention = math.exp(-((t / scale) ** self.shape_parameter))
-        return max(retention, self.biological_floor)
-
-    def sweep_weibull_decay(self, dry_run: bool = False) -> int:
-        """
-        Sweeps all episodic facts, evaluates Weibull retention decay,
-        and marks facts below floor as dormant. Bounded by LIMIT 2000.
-        """
-        cypher = """
-        MATCH ()-[r:RELATES_TO]->()
-        WHERE r.dormant IS NULL OR r.dormant = false
-        RETURN id(r) AS rel_id, r.created_at AS created_at, r.importance AS importance
-        LIMIT 2000
-        """
-        raw = self._query(self.episodic_db, cypher)
-        if not raw or len(raw) < 2 or not raw[1]:
-            return 0
-
-        now = datetime.now(timezone.utc)
-        dormant_ids = []
-
-        for row in raw[1]:
-            rel_id = row[0]
-            created_at_str = row[1]
-            importance = float(row[2] or 5.0)
-            try:
-                dt = datetime.fromisoformat(created_at_str)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                delta_hours = max((now - dt).total_seconds() / 3600.0, 0.0)
-                r_eff = self.compute_retention(delta_hours, importance)
-                if r_eff <= self.biological_floor:
-                    dormant_ids.append(rel_id)
-            except Exception:
-                continue
-
-        if dormant_ids and not dry_run:
-            dormant_cypher = """
-            UNWIND $ids AS target_id
-            MATCH ()-[r:RELATES_TO]->() WHERE id(r) = target_id
-            SET r.dormant = true
-            """
-            self._query(self.episodic_db, dormant_cypher, {"ids": dormant_ids})
-
-        return len(dormant_ids)
-
     # ── Phase 1: Synaptic Pruning & Stale Fact Cleanup ─────────────────────────
 
     async def prune_stale_facts(
@@ -162,11 +100,16 @@ class DreamEngine:
         purge_stale: bool = True,
         dry_run: bool = False,
         stale_fact_names: Optional[List[str]] = None,
+        projects: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Audits both (:Episodic) nodes and (:Entity)-[r:RELATES_TO]->(:Entity) edges
-        for superseded state, archives them to markdown, and purges them atomically.
+        for superseded state, archives them to markdown, and purges them.
+        Only facts of `projects` are touched; None means every project.
         """
+        scope = {"projects": list(projects)} if projects else {}
+        node_scope = "AND coalesce(e.project, 'kortext') IN $projects " if projects else ""
+        edge_scope = "AND coalesce(r.project, 'kortext') IN $projects " if projects else ""
         now = datetime.now(timezone.utc).isoformat()
         today_str = datetime.now().strftime("%Y-%m-%d")
         superseded_details: List[Dict[str, str]] = []
@@ -182,26 +125,27 @@ class DreamEngine:
                 if not dry_run:
                     self._query(
                         self.episodic_db,
-                        "MATCH (e:Episodic) WHERE e.name = $name "
+                        "MATCH (e:Episodic) WHERE e.name = $name " + node_scope +
                         "SET e.superseded = true, e.superseded_by = 'Agent Reflection', "
                         "    e.superseded_at = $now, e.superseded_reason = 'Superseded during cognitive consolidation'",
-                        {"name": s_name, "now": now},
+                        {"name": s_name, "now": now, **scope},
                     )
                     self._query(
                         self.episodic_db,
                         "MATCH ()-[r:RELATES_TO]->() "
-                        "WHERE r.episode_name = $name OR r.id = $name OR r.fact_id = $name "
+                        "WHERE (r.episode_name = $name OR r.id = $name OR r.fact_id = $name) " + edge_scope +
                         "SET r.superseded = true, r.dormant = true, r.superseded_by = 'Agent Reflection', "
                         "    r.superseded_at = $now, r.superseded_reason = 'Superseded during cognitive consolidation'",
-                        {"name": s_name, "now": now},
+                        {"name": s_name, "now": now, **scope},
                     )
 
         # 1. Collect superseded (:Episodic) nodes
         stale_node_names: List[str] = []
         superseded_nodes = self._query(
             self.episodic_db,
-            "MATCH (e:Episodic) WHERE e.superseded = true "
+            "MATCH (e:Episodic) WHERE e.superseded = true " + node_scope +
             "RETURN e.name, e.content, e.created_at, e.superseded_by, e.superseded_reason",
+            scope,
         )
         if superseded_nodes and len(superseded_nodes) > 1 and isinstance(superseded_nodes[1], list):
             for r in superseded_nodes[1]:
@@ -229,8 +173,9 @@ class DreamEngine:
         # 2. Collect and purge superseded [r:RELATES_TO] edges
         superseded_edges = self._query(
             self.episodic_db,
-            "MATCH (s:Entity)-[r:RELATES_TO]->(t:Entity) WHERE r.superseded = true "
+            "MATCH (s:Entity)-[r:RELATES_TO]->(t:Entity) WHERE r.superseded = true " + edge_scope +
             "RETURN coalesce(r.id, r.fact_id, toString(id(r))), r.fact, r.created_at, r.superseded_by, r.superseded_reason, id(r)",
+            scope,
         )
         edge_internal_ids: List[int] = []
         if superseded_edges and len(superseded_edges) > 1 and isinstance(superseded_edges[1], list):
@@ -279,7 +224,8 @@ class DreamEngine:
         active_count = 0
         active_rows = self._query(
             self.episodic_db,
-            "MATCH (e:Episodic) WHERE (e.superseded IS NULL OR e.superseded = false) RETURN count(e)",
+            "MATCH (e:Episodic) WHERE (e.superseded IS NULL OR e.superseded = false) " + node_scope + "RETURN count(e)",
+            scope,
         )
         if active_rows and len(active_rows) > 1 and isinstance(active_rows[1], list) and active_rows[1]:
             try:
@@ -502,7 +448,7 @@ class DreamEngine:
     # ── Phase 2: Louvain Subsystem Community Detection ────────────────────────
 
     def discover_active_projects(self) -> List[str]:
-        """Discovers all active project IDs across FalkorDB (:Project, :Episodic) and InstinctStore."""
+        """Discovers all active project IDs across FalkorDB (:Project, :Episodic)."""
         projects: List[str] = ["kortext"]
         try:
             p_rows = self._query(self.episodic_db, "MATCH (p:Project) RETURN DISTINCT p.id LIMIT 50")
@@ -515,11 +461,6 @@ class DreamEngine:
                 for r in e_rows[1]:
                     if r and r[0] and str(r[0]).strip() not in projects:
                         projects.append(str(r[0]).strip())
-            from kortext.trust.instincts import InstinctStore
-            for inst in InstinctStore().load_all():
-                ip = str(inst.get("project") or "").strip()
-                if ip and ip not in projects:
-                    projects.append(ip)
         except Exception as exc:
             logger.debug("Active project discovery fallback: %s", exc)
         return [p for p in projects if p and p.lower() != "all"] or ["kortext"]
@@ -593,30 +534,9 @@ class DreamEngine:
 
         if invariants is None and not dry_run:
             try:
-                from kortext.trust.instincts import EXECUTABLE_TRUST_LEVELS, InstinctStore
-
                 existing_text = INVARIANTS_FILE.read_text(encoding="utf-8") if INVARIANTS_FILE.exists() else ""
                 auto_invs: List[Dict[str, str]] = []
-                high_conf = [
-                    inst for inst in InstinctStore().get_active_instincts(min_confidence=0.75)
-                    if inst.get("confidence", 0.0) >= 0.75
-                    and int(inst.get("evidence_count") or inst.get("observations") or 0) >= 2
-                    and str(inst.get("trust_level", "tool_confirmed")).lower() in EXECUTABLE_TRUST_LEVELS
-                ]
-                for inst in high_conf[:5]:
-                    rule_str = f"{inst.get('pattern', '')} -> {inst.get('action', '')}".strip(" ->")
-                    if rule_str and rule_str not in existing_text:
-                        auto_invs.append({
-                            "domain": str(inst.get("domain") or "INSTINCT").upper(),
-                            "rule": rule_str,
-                            "rationale": (
-                                f"Auto-induced from verified cross-session instinct "
-                                f"(confidence={inst.get('confidence')}, count={inst.get('evidence_count') or inst.get('observations')})"
-                            ),
-                            "trust_level": str(inst.get("trust_level") or "tool_confirmed"),
-                        })
-
-                # Also induce invariants from high-trust decision episodes in FalkorDB
+                # Induce invariants from high-trust decision episodes in FalkorDB
                 if getattr(self.client, "_is_live_falkor_client", False) is True:
                     ep_rows = self._query(
                         self.episodic_db,
@@ -639,7 +559,7 @@ class DreamEngine:
                 if auto_invs:
                     invariants = auto_invs
             except Exception as auto_exc:
-                logger.debug("Auto invariant induction from InstinctStore/Episodic skipped: %s", auto_exc)
+                logger.debug("Auto invariant induction from decision episodes skipped: %s", auto_exc)
 
         if invariants and not dry_run:
             # 1. Update journal/invariants.md
@@ -729,41 +649,61 @@ class DreamEngine:
         macro_fact: str,
         superseded_fact_ids: List[str],
         project: str = "kortext",
+        subject: Optional[str] = None,
+        object_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Consolidates fine-grained or redundant episodic facts into a single authoritative macro-truth.
         Creates a new macro-truth fact relationship in FalkorDB with r.is_macro = true, r.project = $project.
         Marks candidate facts in superseded_fact_ids with SET r.superseded = true, r.dormant = true, r.superseded_by = $macro_fact_id.
+        The macro fact links `subject` to `object_name`; when they are omitted, every superseded fact
+        must share one (subject, object) pair, otherwise nothing is written.
         """
         macro_fact_id = f"fact_macro_{uuid.uuid4().hex[:10]}"
         now = datetime.now(timezone.utc).isoformat()
 
         updated_count = 0
-        cand_sub = None
-        cand_obj = None
+        skipped = {
+            "status": "skipped",
+            "macro_fact_id": None,
+            "macro_fact": macro_fact,
+            "project": project,
+            "superseded_count": 0,
+            "superseded_fact_ids": list(superseded_fact_ids),
+        }
 
         if superseded_fact_ids:
-            find_cypher = """
-            MATCH (s:Entity)-[r:RELATES_TO]->(t:Entity)
-            WHERE r.id IN $ids OR r.fact_id IN $ids OR toString(id(r)) IN $ids
-            RETURN s.name, t.name LIMIT 1
-            """
-            find_rows = self._query(self.episodic_db, find_cypher, {"ids": list(superseded_fact_ids)})
-            if find_rows and len(find_rows) > 1 and find_rows[1] and len(find_rows[1][0]) >= 2:
-                cand_sub = str(find_rows[1][0][0])
-                cand_obj = str(find_rows[1][0][1])
+            if not (subject and object_name):
+                pairs = self._query(
+                    self.episodic_db,
+                    "MATCH (s:Entity)-[r:RELATES_TO]->(t:Entity) "
+                    "WHERE (r.id IN $ids OR r.fact_id IN $ids OR toString(id(r)) IN $ids) "
+                    "AND coalesce(r.project, 'kortext') = $project "
+                    "RETURN DISTINCT s.name, t.name",
+                    {"ids": list(superseded_fact_ids), "project": project},
+                )
+                rows = pairs[1] if pairs and len(pairs) > 1 and pairs[1] else []
+                if len(rows) != 1:
+                    logger.warning(
+                        "[DreamEngine] Macro fact for '%s' needs subject and object: the %d facts span %d entity pairs.",
+                        project, len(superseded_fact_ids), len(rows),
+                    )
+                    return {**skipped, "reason": f"facts span {len(rows)} entity pairs; pass subject and object"}
+                subject, object_name = str(rows[0][0]), str(rows[0][1])
 
             update_cypher = """
             UNWIND $ids AS target_id
             MATCH ()-[r:RELATES_TO]->()
-            WHERE r.id = target_id OR r.fact_id = target_id OR toString(id(r)) = toString(target_id)
-            SET r.superseded = true, r.dormant = true, r.superseded_by = $macro_fact_id
+            WHERE (r.id = target_id OR r.fact_id = target_id OR toString(id(r)) = toString(target_id))
+              AND coalesce(r.project, 'kortext') = $project
+            SET r.superseded = true, r.dormant = true, r.superseded_by = $macro_fact_id,
+                r.superseded_at = $now, r.valid_to = coalesce(r.valid_to, $now)
             RETURN count(r)
             """
             res = self._query(
                 self.episodic_db,
                 update_cypher,
-                {"ids": list(superseded_fact_ids), "macro_fact_id": macro_fact_id},
+                {"ids": list(superseded_fact_ids), "macro_fact_id": macro_fact_id, "project": project, "now": now},
             )
             if res and len(res) > 1 and res[1] and res[1][0]:
                 try:
@@ -779,17 +719,10 @@ class DreamEngine:
                     project,
                     len(superseded_fact_ids),
                 )
-                return {
-                    "status": "skipped",
-                    "macro_fact_id": None,
-                    "macro_fact": macro_fact,
-                    "project": project,
-                    "superseded_count": 0,
-                    "superseded_fact_ids": list(superseded_fact_ids),
-                }
+                return skipped
 
-        sub_name = cand_sub or project
-        obj_name = cand_obj or "MacroTruth"
+        sub_name = subject or project
+        obj_name = object_name or "MacroTruth"
 
         create_cypher = """
         MERGE (s:Entity {name: $sub})
@@ -912,7 +845,6 @@ class DreamEngine:
         distilled_skills: Optional[List[Dict[str, Any]]] = None,
         global_skills: bool = False,
         workspace_root: Optional[str] = None,
-        approve_instincts: bool = False,
     ) -> Dict[str, Any]:
         """Runs cognitive reflection phases, consolidation, and skill distillation (100% Agent-Native)."""
         start_time = datetime.now()
@@ -931,19 +863,12 @@ class DreamEngine:
             purge_stale,
         )
 
-        # Phase 0: Stretched Weibull Retention Decay Sweep
-        weibull_dormant = self.sweep_weibull_decay(dry_run=dry_run)
-        logger.info(
-            "[DreamEngine] Phase 0 complete: %d facts decayed to biological floor (%s).",
-            weibull_dormant,
-            self.biological_floor,
-        )
-
         # Phase 1: Synaptic Pruning, Entity Disambiguation & Stale Fact Cleanup
         prune_res = await self.prune_stale_facts(
             purge_stale=purge_stale,
             dry_run=dry_run,
             stale_fact_names=stale_fact_names,
+            projects=target_projects,
         )
         dedup_count = sum(self.deduplicate_near_identical_facts(project=p, dry_run=dry_run) for p in target_projects)
         prune_res["deduplicated_facts_count"] = dedup_count
@@ -981,6 +906,8 @@ class DreamEngine:
                             macro_fact=macro_fact,
                             superseded_fact_ids=superseded_ids,
                             project=item_project,
+                            subject=item.get("subject"),
+                            object_name=item.get("object"),
                         )
                         consolidation_results.append(res)
                     else:
@@ -993,32 +920,9 @@ class DreamEngine:
                         })
             logger.info("[DreamEngine] Phase 4 complete: %d macro facts consolidated.", len(consolidation_results))
 
-        # Phase 5: Skill Distillation (Human-gated or tool_confirmed trust-fenced for InstinctStore)
+        # Phase 5: Skill Distillation (agent-supplied skills only)
         distilled_skills_results: List[Dict[str, Any]] = []
-        staged_instincts: List[Dict[str, Any]] = []
         effective_skills: List[Dict[str, Any]] = list(distilled_skills or [])
-        auto_approve = approve_instincts or os.getenv("KORTEXT_AUTO_DISTILL_INSTINCTS", "0").strip() == "1"
-        try:
-            from kortext.trust.instincts import EXECUTABLE_TRUST_LEVELS, InstinctStore
-
-            inst_store = InstinctStore()
-            for inst in inst_store.get_high_confidence_instincts(min_confidence=0.8, project=project):
-                inst_trust = str(inst.get("trust_level", "tool_confirmed")).lower()
-                is_verified = approve_instincts or inst_trust in EXECUTABLE_TRUST_LEVELS
-                candidate_skill = {
-                    "name": inst["skill_name"],
-                    "description": f"Auto-distilled instinct ({inst['domain']}, confidence={inst['confidence']}): {inst['pattern'][:80]}",
-                    "content": f"# {inst['skill_name']}\n\n## Pattern\n{inst['pattern']}\n\n## Recommended Action\n{inst['action']}\n",
-                    "instinct_id": inst["id"],
-                    "trust_level": "user_approved" if approve_instincts else inst_trust,
-                }
-                if auto_approve and is_verified:
-                    effective_skills.append(candidate_skill)
-                else:
-                    staged_instincts.append(candidate_skill)
-        except Exception as e:
-            logger.debug("Autonomous instinct lookup skipped: %s", e)
-
         if effective_skills:
             for s in effective_skills:
                 s_name = (s.get("name") or s.get("skill_name") or "unnamed-skill").strip().lower()
@@ -1036,13 +940,6 @@ class DreamEngine:
                         workspace_root=s_ws,
                         trust_level=s_trust,
                     )
-                    if s.get("instinct_id"):
-                        try:
-                            from kortext.trust.instincts import InstinctStore
-
-                            InstinctStore().mark_distilled(str(s["instinct_id"]), str(created_path))
-                        except Exception:
-                            logger.debug("Suppressed non-fatal exception")
                     distilled_skills_results.append({
                         "name": s_name,
                         "description": s_desc,
@@ -1069,7 +966,6 @@ class DreamEngine:
         staged_proposals = {
             "contradictions": staged_contradictions,
             "macro_truth_candidates": consolidation_results,
-            "instinct_candidates": staged_instincts,
         }
 
         # Dream Synthesis Report Generation
@@ -1078,7 +974,6 @@ class DreamEngine:
             f"# Kortext Dream Report: {date_str}",
             f"**Execution Mode:** {'Dry Run' if dry_run else 'Live Consolidation'} | **Duration:** {duration:.2f}s | **Project:** {project}\n",
             "## 1. Synaptic Pruning & Fact Cleanup",
-            f"- **Weibull Dormant Nodes (Floor {self.biological_floor}):** {weibull_dormant}",
             f"- **Facts Superseded:** {prune_res['superseded_count']}",
             f"- **Stale Nodes Purged:** {prune_res['archived_count']}",
         ]
@@ -1172,7 +1067,6 @@ class DreamEngine:
         return {
             "status": "ok",
             "duration_seconds": duration,
-            "weibull_dormant_count": weibull_dormant,
             "superseded_count": prune_res.get("superseded_count", 0),
             "archived_count": prune_res.get("archived_count", 0),
             "subsystems_count": len(subsystems),

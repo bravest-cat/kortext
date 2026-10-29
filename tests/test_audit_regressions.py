@@ -62,6 +62,7 @@ def test_ast_oversized_top_level_function_split_no_name_error():
     assert all(c.get("parent_id") == "kortext/sample_oversized.py::oversized_top_level_fn" for c in node_chunks)
 
 
+@pytest.mark.usefixtures("real_falkordb")
 def test_task_dag_cypher_quotes_leases_and_handoffs(tmp_path, monkeypatch):
     """Audit Bug #1 & Failure Modes #3/#4: quoted Cypher literals, lease timeouts, heartbeats, and artifact handoffs."""
     from kortext.tasks.tracker import TaskDAGTracker
@@ -86,18 +87,21 @@ def test_task_dag_cypher_quotes_leases_and_handoffs(tmp_path, monkeypatch):
     )
 
     try:
-        # 1. detect_file_overlaps works on live FalkorDB
+        # 1. A pending task is not active, so it never counts as an overlap
         ov = tracker.detect_file_overlaps(["kortext/retrieval/engine.py"], project_id=proj, exclude_task_id=t1)
-        assert ov["recommended_workspace_mode"] == "branch"
-        assert any(item["task_id"] == t2 for item in ov["overlapping_tasks"])
+        assert ov["recommended_workspace_mode"] == "shared"
 
         # 2. claim_next_ready_task sets claimed_at & lease_expires_at, and get_in_progress_tasks returns it
         claimed = tracker.claim_next_ready_task(worker_id="runner-audit", project_id=proj, lease_seconds=600)
+        ov = tracker.detect_file_overlaps(["./kortext/retrieval/engine.py"], project_id=proj, exclude_task_id=t2)
+        assert ov["recommended_workspace_mode"] == "branch"
+        assert any(item["task_id"] == t1 for item in ov["overlapping_tasks"])
+        assert tracker.detect_file_overlaps(["test_engine.py"], project_id=proj)["recommended_workspace_mode"] == "shared"
         assert claimed is not None
         assert claimed["id"] == t1
         assert claimed["status"] == "in_progress"
         assert "claimed_at" in claimed and "lease_expires_at" in claimed
-        assert claimed.get("recommended_workspace_mode") == "branch"
+        assert claimed.get("recommended_workspace_mode") == "shared"  # the only other task is pending
 
         in_prog = tracker.get_in_progress_tasks(project_id=proj)
         assert any(t["id"] == t1 for t in in_prog)
@@ -159,9 +163,7 @@ async def test_retrieval_engine_concurrent_candidate_metadata_isolation():
     engine._retrieve_qdrant_points = fake_retrieve_dense  # type: ignore
     engine._retrieve_qdrant_sparse_points = fake_retrieve_sparse  # type: ignore
     engine._fetch_ast_matches = lambda cands: []  # type: ignore
-    engine._fetch_hippo_subgraph = lambda cands: []  # type: ignore
     engine._fetch_temporal_facts = lambda prompt, project=None, candidate_metadata=None: []  # type: ignore
-    engine.reranker.rerank = AsyncMock(side_effect=lambda prompt, cands, top_k=5: cands)
 
     meta_a = {}
     meta_b = {}
@@ -780,7 +782,6 @@ async def test_complete_remediation_21_items_verified(tmp_path, monkeypatch):
     - FM8: TaskDAGTracker.execute_action('milestone_handoff', ...)
     - S1/S2/S3: /api/scip/auto path validation, Qdrant enable_cors: false, and clustering.py build_cypher_params_header
     - B2: index_single_file(..., skip_ast_if_sha=...) skips duplicate save_file_ast when SHA-256 matches
-    - B3: fetch_tier2_episodic and boost_prompt_context surface active instincts & grounded invariants
     - B5: BlastRadiusGuard comment/whitespace pass, Prior-AST-Search Credit, and enforce_first_touch=True
     - B8 & LlamaIndex removal: count_tokens syntax-density calibration and zero llama_index imports in kortext/
     """
@@ -799,7 +800,6 @@ async def test_complete_remediation_21_items_verified(tmp_path, monkeypatch):
     from kortext.hooks.pipelines.pre_invoke import BoostPromptGroundingProbe
     from kortext.hooks.pipelines.pre_tool import BlastRadiusGuard
     from kortext.ingest import index_single_file
-    from kortext.trust.instincts import InstinctStore
     from kortext.retrieval.federated import fetch_tier2_episodic
     from kortext.tasks.tracker import TaskDAGTracker
 
@@ -906,27 +906,6 @@ async def test_complete_remediation_21_items_verified(tmp_path, monkeypatch):
     assert res_b2["status"] == "indexed"
     mock_sym_mgr.save_file_ast.assert_not_called()
 
-    # 7. B3: Continuous learning loop surfaces active instincts in fetch_tier2_episodic
-    store = InstinctStore(store_path=tmp_path / "instincts.json")
-    store.observe(
-        pattern="modifying FalkorDB queries",
-        action="Always use parameterized Cypher via build_cypher_params_header",
-        domain="security",
-        project="kortext",
-        confidence=0.90,
-    )
-    with patch("kortext.trust.instincts.InstinctStore", return_value=store):
-        t2_items = await fetch_tier2_episodic(
-            episodic_search_func=AsyncMock(return_value=[]),
-            query="modifying FalkorDB queries",
-            project="kortext",
-            ws_root=None,
-            col=None,
-            budget=500,
-            max_facts=5,
-        )
-        assert any("[Instinct:security" in item and "build_cypher_params_header" in item for item in t2_items)
-
     # 8. B5: BlastRadiusGuard comment/whitespace pass, Prior-AST-Search Credit, and enforce_first_touch=True
     target_py = tmp_path / "guarded.py"
     target_py.write_text("def core_api():\n    return 1\n", encoding="utf-8")
@@ -984,7 +963,6 @@ async def test_complete_remediation_21_items_verified(tmp_path, monkeypatch):
 
     # 10. B7 & Phase 2 End-to-End Checks:
     # - DreamEngine.discover_active_projects() & run_sidecar.sh DREAM_PROJ=all
-    # - Project-scoped instinct mirror (~/.kortext/projects/kortext/instincts.json)
     # - Design It Twice in to-spec/SKILL.md & kortext-architect.md
     # - Challenger Fuzz Gate in kortext-security-auditor.md & Silent Failure Hunter in kortext-code-reviewer.md
     from kortext.dream import DreamEngine
@@ -994,7 +972,6 @@ async def test_complete_remediation_21_items_verified(tmp_path, monkeypatch):
     assert "kortext" in active_projs
     sidecar_sh = (repo_root / "integrations" / "antigravity" / "sidecars" / "run_sidecar.sh").read_text(encoding="utf-8")
     assert 'DREAM_PROJ="${DREAM_PROJ:-all}"' in sidecar_sh
-    assert (tmp_path / "projects" / "kortext" / "instincts.json").is_file()
 
     to_spec_md = (repo_root / "integrations" / "antigravity" / "skills" / "to-spec" / "SKILL.md").read_text(encoding="utf-8")
     arch_md = (repo_root / "integrations" / "antigravity" / "agents" / "kortext-architect.md").read_text(encoding="utf-8")

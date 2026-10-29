@@ -102,7 +102,9 @@ class TaskDAGTracker(TaskOrchestrationMixin):
                 visited.add(curr)
                 stack.extend(dep_map.get(curr, []))
         except Exception as exc:
-            logger.debug("Cycle check fallback: %s", exc)
+            # Fail closed: an unreadable graph must not let a cycle in.
+            logger.warning("Dependency cycle check failed, rejecting task '%s': %s", task_id, exc)
+            return True
         return False
 
     def create_task(
@@ -126,6 +128,14 @@ class TaskDAGTracker(TaskOrchestrationMixin):
         dep_list = [d for d in (raw_deps or []) if d]
         t_files = [str(f).strip() for f in (target_files or []) if str(f).strip()]
         proj_id = project_id or "kortext"
+
+        existing = self.client.query(
+            self.graph,
+            "MATCH (t:Task {id: $id}) WHERE coalesce(t.project_id, 'kortext') <> $project_id RETURN t.project_id LIMIT 1",
+            {"id": resolved_id, "project_id": proj_id},
+        )
+        if existing and len(existing) > 1 and existing[1]:
+            raise ValueError(f"Task id '{resolved_id}' already belongs to project '{existing[1][0][0]}'")
 
         if dep_list and self._has_dependency_cycle(
             resolved_id, dep_list, project_id=proj_id, check_graph=has_explicit_id
@@ -170,16 +180,18 @@ class TaskDAGTracker(TaskOrchestrationMixin):
             for dep_id in dep_list:
                 dep_cypher = """
                 MATCH (t:Task {id: $id}), (dep:Task {id: $dep_id})
+                WHERE coalesce(dep.project_id, 'kortext') = $project_id
                 MERGE (t)-[:DEPENDS_ON {strict: true}]->(dep)
                 """
-                self.client.query(self.graph, dep_cypher, {"id": resolved_id, "dep_id": dep_id})
+                self.client.query(self.graph, dep_cypher, {"id": resolved_id, "dep_id": dep_id, "project_id": proj_id})
 
         link_cypher = """
         MATCH (waiting:Task), (new_t:Task {id: $id})
         WHERE $id IN coalesce(waiting.depends_on, [])
+          AND coalesce(waiting.project_id, 'kortext') = $project_id
         MERGE (waiting)-[:DEPENDS_ON {strict: true}]->(new_t)
         """
-        self.client.query(self.graph, link_cypher, {"id": resolved_id})
+        self.client.query(self.graph, link_cypher, {"id": resolved_id, "project_id": proj_id})
         self._refresh_hud_snapshot(proj_id)
 
         return resolved_id
@@ -518,14 +530,14 @@ class TaskDAGTracker(TaskOrchestrationMixin):
                     f"QUALITY_VERDICT={review_verdict_info.get('quality_verdict')}. Both must be PASS.{cb_note}"
                 )
 
-        from kortext.hooks.pipelines.post_tool import has_recent_passing_test_run
+        from kortext.hooks.pipelines.post_tool import consume_test_execution_proof, has_recent_passing_test_run
 
-        test_proof_verified = has_recent_passing_test_run()
+        test_proof_verified = has_recent_passing_test_run(command=test_command)
         default_verify = "0" if os.getenv("PYTEST_CURRENT_TEST") else "1"
         if os.getenv("KORTEXT_VERIFY_TEST_PROOF", default_verify) == "1" and not test_proof_verified:
             raise ValueError(
-                "Task completion rejected (FM4 Premature Victory Guard): No passing test execution proof "
-                "recorded by PostToolUse in ~/.kortext/run/last_test_run.json."
+                "Task completion rejected (FM4 Premature Victory Guard): no unused passing run of "
+                f"`{test_command}` recorded by PostToolUse in ~/.kortext/run/last_test_run.json."
             )
 
         resolved_base_commit = base_commit or self._get_git_head_commit()
@@ -538,6 +550,8 @@ class TaskDAGTracker(TaskOrchestrationMixin):
             summary=summary,
         )
         self.update_task_status(task_id, status="completed")
+        if test_proof_verified:
+            consume_test_execution_proof(task_id)
         if token_budget_spent is not None and token_budget_spent > 0:
             try:
                 self.client.query(

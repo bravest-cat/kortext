@@ -756,6 +756,33 @@ class SensitivePathReadGuard:
         return InterceptorResult.allow()
 
 
+class FileOwnershipGuard:
+    """Denies a task worker's edit to a file that another in_progress task has claimed."""
+
+    def check(self, context: HookContext) -> InterceptorResult:
+        own = os.getenv("KORTEXT_TASK_ID", "").strip()
+        if not own or not context.target_file:
+            return InterceptorResult.allow()
+        if context.tool_name not in ("write_to_file", "replace_file_content", "multi_replace_file_content"):
+            return InterceptorResult.allow()
+        from kortext.tasks.orchestration_mixin import _as_list, _same_path
+        from kortext.tasks.tracker import TaskDAGTracker
+
+        tracker = TaskDAGTracker()
+        rows = tracker.client.query(
+            tracker.graph,
+            "MATCH (t:Task) WHERE t.status = 'in_progress' AND t.id <> $own RETURN t.id, coalesce(t.target_files, [])",
+            {"own": own},
+        )
+        for tid, files in (rows[1] if rows and len(rows) > 1 else []) or []:
+            if any(_same_path(context.target_file, f) for f in _as_list(files)):
+                return InterceptorResult.deny(
+                    reason=f"{context.target_file} is owned by in_progress task '{tid}'. "
+                    f"Coordinate through the orchestrator or wait for '{tid}' to complete."
+                )
+        return InterceptorResult.allow()
+
+
 class PreToolPipeline:
     """Dispatches PreToolUse interceptors sequentially."""
 
@@ -767,6 +794,7 @@ class PreToolPipeline:
             SecretLeakGuard(),
             SensitivePathReadGuard(),
             BlastRadiusGuard(),
+            FileOwnershipGuard(),
         )
 
     def execute(self, context: HookContext) -> InterceptorResult:

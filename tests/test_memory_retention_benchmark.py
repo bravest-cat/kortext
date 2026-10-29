@@ -1,12 +1,8 @@
 """
-Memory Retention Benchmark Suite (MR-1 through MR-6) and Weibull Decay Model Validation.
+Memory retention benchmarks.
 
-Covers:
-- MR-1, MR-2, MR-3: Weibull Retention Curve, Monotonic Decay, Parameter Checkpoints,
-  Importance Half-Life Scaling, Biological Floor Invariant, and Markdown Artifact Generation.
-- MR-4: Bi-Temporal Fact Retention (Round-trip Validity Windows and Dormant Fact Supersession).
-- MR-5: HippoRAG Associative Personalized PageRank (Multi-hop retention, IDS hub dilution, P95 latency).
-- MR-6: End-to-End Token Budget Enforcement (TAA-k Trimming, Seek Symbol Budget, and Session Savings).
+- MR-4: Bi-temporal fact retention (round-trip validity windows, supersession, recency order).
+- MR-6: Token budgets (seek_symbol output size, session savings against ripgrep).
 """
 
 from __future__ import annotations
@@ -29,8 +25,6 @@ import pytest
 from kortext.chunking.token_utils import count_tokens
 from kortext.episodic.driver import AgentNativeEpisodicDriver
 from kortext.falkordb_client import get_shared_falkordb_client
-from kortext.retrieval.engine import apply_taak_trimming
-from kortext.retrieval.hipporag import HippoRAGPPR
 from kortext.symbols.seek import SymbolSeekEngine
 
 
@@ -56,153 +50,6 @@ def _simulate_rg(project_root: Path, target_dir_rel: str, pattern: str) -> str:
         except Exception:
             continue
     return "\n".join(lines)
-
-
-from kortext.retrieval.retention import compute_weibull_retention
-
-# Alias matching alternative internal naming
-_weibull_retention = compute_weibull_retention
-
-
-def _render_ascii_bar(fraction: float, bar_width: int = 15) -> str:
-    """Renders a fixed-width Unicode block bar for ASCII visualization."""
-    filled = max(0, min(bar_width, int(round(fraction * bar_width))))
-    return "█" * filled + "░" * (bar_width - filled)
-
-
-# ============================================================================
-# Test Suite: TestWeibullRetentionCurve (MR-1, MR-2, MR-3)
-# ============================================================================
-
-class TestWeibullRetentionCurve:
-    """Validates the mathematical invariants of the Stretched Weibull Decay Model."""
-
-    def test_retention_curve_monotonically_decreasing(self):
-        """MR-1: Verifies retention is monotonically non-increasing across evaluation horizons."""
-        # Arrange: Discrete observation timestamps from immediate to 1 month
-        time_horizons = [0.001, 1.0, 6.0, 24.0, 72.0, 168.0, 336.0, 720.0]
-
-        # Act & Assert: For multiple importance tiers, retention must never increase over time
-        for importance in [1, 5, 10]:
-            retentions = [compute_weibull_retention(t, importance=importance) for t in time_horizons]
-            for i in range(len(retentions) - 1):
-                assert retentions[i] >= retentions[i + 1], (
-                    f"Monotonicity violated at imp={importance} between t={time_horizons[i]}h "
-                    f"({retentions[i]:.4f}) and t={time_horizons[i+1]}h ({retentions[i+1]:.4f})"
-                )
-
-    @pytest.mark.parametrize(
-        "t_hours,min_expected,max_expected",
-        [
-            (0.001, 0.99, 1.00),  # Immediate retention
-            (24.0, 0.65, 0.75),   # 1 Day checkpoint
-            (72.0, 0.40, 0.55),   # 3 Day checkpoint (nominal half-life window)
-            (168.0, 0.20, 0.35),  # 1 Week checkpoint
-            (720.0, 0.05, 0.10),  # 1 Month checkpoint (approaching biological floor)
-        ],
-    )
-    def test_retention_checkpoint_values(
-        self, t_hours: float, min_expected: float, max_expected: float
-    ):
-        """MR-2: Parametrized verification of expected retention ranges at standard checkpoints."""
-        # Arrange / Act
-        r = compute_weibull_retention(t_hours, importance=5)
-
-        # Assert
-        assert min_expected <= r <= max_expected, (
-            f"Checkpoint t={t_hours}h produced {r:.4f}, outside expected [{min_expected}, {max_expected}]"
-        )
-
-    def test_importance_scales_retention_half_life(self):
-        """MR-2: Verifies higher importance facts retain >= 1.5x mass at 72 hours vs baseline."""
-        # Arrange
-        eval_window_h = 72.0
-
-        # Act
-        r_low = compute_weibull_retention(eval_window_h, importance=1)
-        r_high = compute_weibull_retention(eval_window_h, importance=10)
-
-        # Assert: High importance (10) must retain at least 1.5x the mass of low importance (1)
-        ratio = r_high / r_low
-        assert ratio >= 1.50, f"Expected retention ratio >= 1.5x at 72h, got {ratio:.2f}x ({r_high:.4f} / {r_low:.4f})"
-
-    def test_biological_floor_invariant(self):
-        """MR-3: Verifies retention never falls below 0.05 biological floor even over deep geological time."""
-        # Arrange & Act
-        r_10k_imp1 = compute_weibull_retention(10_000.0, importance=1)
-        r_100k_imp1 = compute_weibull_retention(100_000.0, importance=1)
-        r_100k_imp10 = compute_weibull_retention(100_000.0, importance=10)
-
-        # Assert
-        assert r_10k_imp1 == 0.05, f"Expected biological floor 0.05, got {r_10k_imp1}"
-        assert r_100k_imp1 == 0.05, f"Expected biological floor 0.05, got {r_100k_imp1}"
-        assert r_100k_imp10 == 0.05, f"Expected biological floor 0.05, got {r_100k_imp10}"
-
-    def test_generate_weibull_decay_curve_artifact(self):
-        """MR-3: Generates data/weibull_decay_curve.md artifact with ASCII sparkline visualization."""
-        # Arrange
-        output_file = Path(__file__).resolve().parent.parent / "data" / "weibull_decay_curve.md"
-        horizons: List[Tuple[float, str]] = [
-            (0.1, "6 minutes"),
-            (1.0, "1 hour"),
-            (6.0, "6 hours"),
-            (12.0, "12 hours"),
-            (24.0, "1 day"),
-            (48.0, "2 days"),
-            (72.0, "3 days (Half-Life)"),
-            (168.0, "1 week"),
-            (336.0, "2 weeks"),
-            (720.0, "1 month"),
-            (1000.0, "~41 days"),
-        ]
-
-        # Act: Build structured artifact markdown content
-        lines = [
-            "# Kortext Stretched Weibull Memory Retention Decay Curves",
-            "",
-            "> Mathematical specification benchmark: Invariants MR-1, MR-2, MR-3.",
-            "> Governing Equation: $R(t) = \\max\\left(\\exp\\left(-\\left(\\frac{t}{\\lambda \\cdot e^{I/10}}\\right)^\\beta\\right), \\text{floor}\\right)$",
-            "> Parameters: $\\lambda = 72.0\\text{h}$, $\\beta = 0.65$, Biological Floor $= 0.05$ (5%).",
-            "",
-            "## Retention Profile Comparison Across Importance Tiers",
-            "",
-            "| Delta (h) | Horizon | Imp 1 Retention | Imp 1 Sparkline | Imp 5 Retention | Imp 5 Sparkline | Imp 10 Retention | Imp 10 Sparkline |",
-            "|:---|:---|:---|:---|:---|:---|:---|:---|",
-        ]
-
-        for h, label in horizons:
-            r1 = compute_weibull_retention(h, importance=1)
-            r5 = compute_weibull_retention(h, importance=5)
-            r10 = compute_weibull_retention(h, importance=10)
-
-            bar1 = f"`{_render_ascii_bar(r1)}`"
-            bar5 = f"`{_render_ascii_bar(r5)}`"
-            bar10 = f"`{_render_ascii_bar(r10)}`"
-
-            lines.append(
-                f"| {h:7.1f} | {label:18} | {r1 * 100:5.1f}% | {bar1} | {r5 * 100:5.1f}% | {bar5} | {r10 * 100:5.1f}% | {bar10} |"
-            )
-
-        lines.extend([
-            "",
-            "## Architectural Invariants Verified",
-            "- **MR-1 (Monotonicity)**: Retention decreases monotonically over time horizons.",
-            "- **MR-2 (Importance Half-Life Scaling)**: Importance 10 retains $\\ge 1.5\\times$ more mass at 72 hours than Importance 1.",
-            "- **MR-3 (Biological Floor)**: Retention is asymptotic to $0.05$ (5%), preventing catastrophic forgetting of consolidated foundational facts.",
-            "",
-        ])
-
-        content = "\n".join(lines)
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(content, encoding="utf-8")
-
-        # Assert
-        assert output_file.exists(), f"Artifact file was not created at {output_file}"
-        saved_text = output_file.read_text(encoding="utf-8")
-        assert len(saved_text) > 500
-        assert "Stretched Weibull" in saved_text
-        assert "Biological Floor" in saved_text
-        assert "Half-Life" in saved_text
 
 
 # ============================================================================
@@ -312,6 +159,7 @@ class TestBiTemporalFactRetention:
             )
 
     @pytest.mark.anyio
+    @pytest.mark.usefixtures("real_falkordb")
     async def test_unified_fact_filtering_excludes_both_superseded_and_dormant(self):
         """MR-4: Validates unified filtering: facts are active iff coalesce(r.superseded, false)=false AND coalesce(r.dormant, false)=false."""
         now = datetime.now(timezone.utc).isoformat()
@@ -548,6 +396,7 @@ class TestBiTemporalFactRetention:
             )
 
     @pytest.mark.anyio
+    @pytest.mark.usefixtures("real_falkordb")
     async def test_episodic_search_temporal_ordering(self):
         """MR-4: Verifies search ranks newer matching facts above older ones when relevance scores tie."""
         now = datetime.now(timezone.utc)
@@ -633,18 +482,19 @@ class TestBiTemporalFactRetention:
             )
 
     @pytest.mark.anyio
-    async def test_episodic_search_weibull_retention_ranking(self):
-        """MR-4: Verifies Weibull retention decay ranks recent fact above an identical-relevance old fact."""
+    @pytest.mark.usefixtures("real_falkordb")
+    async def test_episodic_search_prefers_recent_fact_on_equal_relevance(self):
+        """MR-4: Of two equally relevant facts, the more recent one ranks first."""
         now = datetime.now(timezone.utc)
         # Old fact from 30 days ago (720 hours)
         t_old = (now - timedelta(days=30)).isoformat()
         # Fresh fact from 1 hour ago
         t_fresh = (now - timedelta(hours=1)).isoformat()
 
-        subject = f"WeibullSearchSubj_{uuid.uuid4().hex[:8]}"
-        target = f"WeibullSearchTarget_{uuid.uuid4().hex[:8]}"
+        subject = f"RecencySubj_{uuid.uuid4().hex[:8]}"
+        target = f"RecencyTarget_{uuid.uuid4().hex[:8]}"
         relation = "STATUS"
-        unique_term = f"weibullterm{uuid.uuid4().hex[:6]}"
+        unique_term = f"recencyterm{uuid.uuid4().hex[:6]}"
 
         try:
             self.driver.record_fact(
@@ -666,9 +516,8 @@ class TestBiTemporalFactRetention:
 
             results = await self.driver.search(unique_term, limit=5)
             assert len(results) >= 2, f"Expected 2 matching facts, got {len(results)}"
-            # Fresh fact must rank first due to Weibull retention modulation
-            assert "fresh recent entry" in results[0], f"Expected fresh fact first due to Weibull retention, got {results}"
-            assert "old stale entry" in results[1], f"Expected old fact second due to Weibull decay, got {results}"
+            assert "fresh recent entry" in results[0], f"Expected fresh fact first, got {results}"
+            assert "old stale entry" in results[1], f"Expected old fact second, got {results}"
         finally:
             self.driver._query(
                 "MATCH (e:Entity) WHERE e.name IN [$s, $t] DETACH DELETE e",
@@ -677,114 +526,11 @@ class TestBiTemporalFactRetention:
 
 
 # ============================================================================
-# Test Suite: TestHippoRAGAssociativeRetention (MR-5)
-# ============================================================================
-
-@pytest.mark.usefixtures("seeded_symbol_graph")
-class TestHippoRAGAssociativeRetention:
-    """Validates HippoRAG Personalized PageRank associative retrieval over kortext_symbols."""
-
-    @pytest.fixture(autouse=True)
-    def setup_hipporag(self):
-        self.ppr = HippoRAGPPR()
-
-    def test_ppr_retention_across_2_hops(self):
-        """MR-5: Seeds ['RetrievalEngine'], verifies >= 1 associative node with score > 0.01."""
-        # Arrange
-        seeds = ["RetrievalEngine"]
-
-        # Act
-        results = self.ppr.retrieve_associative_subgraph(
-            seed_entities=seeds,
-            top_k=15,
-            graph_name="kortext_symbols",
-        )
-
-        # Assert: Associative (non-seed) nodes must be discovered with non-trivial mass
-        associative_nodes = [r for r in results if r[0] not in seeds]
-        assert len(associative_nodes) >= 1, "Expected at least 1 associative 2-hop node to be retrieved"
-        assert any(score > 0.01 for _, score in associative_nodes), (
-            f"Expected at least one associative node with score > 0.01, got: {associative_nodes}"
-        )
-
-    def test_ppr_seed_specificity_vs_hub_dilution(self):
-        """MR-5: Verifies Inverse Degree Specificity (IDS) prevents high-degree hubs from drowning specific nodes."""
-        # Arrange: RetrievalEngine is a specific symbol; main is a high-degree hub
-        seeds = ["RetrievalEngine", "main"]
-
-        # Act
-        results = dict(
-            self.ppr.retrieve_associative_subgraph(
-                seed_entities=seeds,
-                top_k=20,
-                graph_name="kortext_symbols",
-            )
-        )
-
-        # Assert: RetrievalEngine must receive significantly higher score than generic hub 'main'
-        score_specific = results.get("RetrievalEngine", 0.0)
-        score_hub = results.get("main", 0.0)
-
-        assert score_specific > score_hub * 2.0, (
-            f"IDS failed to protect specific node: RetrievalEngine ({score_specific:.4f}) vs main ({score_hub:.4f})"
-        )
-
-    def test_ppr_latency_under_load_p95(self):
-        """MR-5: Runs 30 iterations of PPR and verifies p50 < 10ms and p95 < 30ms under load."""
-        # Arrange
-        iterations = 30
-        latencies_ms: List[float] = []
-
-        # Act
-        for _ in range(iterations):
-            t0 = time.perf_counter()
-            self.ppr.retrieve_associative_subgraph(
-                seed_entities=["RetrievalEngine"],
-                top_k=10,
-                graph_name="kortext_symbols",
-            )
-            latencies_ms.append((time.perf_counter() - t0) * 1000.0)
-
-        # Assert
-        p50 = float(np.percentile(latencies_ms, 50))
-        p95 = float(np.percentile(latencies_ms, 95))
-
-        assert p50 < 10.0, f"HippoRAG PPR p50 latency exceeded budget: {p50:.2f}ms (target < 10ms)"
-        assert p95 < 30.0, f"HippoRAG PPR p95 latency exceeded budget: {p95:.2f}ms (target < 30ms)"
-
-
-# ============================================================================
 # Test Suite: TestE2ETokenBudget (MR-6)
 # ============================================================================
 
 class TestE2ETokenBudget:
-    """Validates token budget limits and savings across TAA-k, seek_symbol, and full sessions."""
-
-    def test_taak_token_budget_enforcement(self):
-        """MR-6: 30 candidates, verifies trimmed <= 15 and >= 50% token reduction."""
-        # Arrange: 30 candidates with a sharp drop off after candidate 5
-        candidates = []
-        for i in range(30):
-            if i < 5:
-                score = 0.50 - i * 0.02
-            else:
-                score = 0.05 - (i - 5) * 0.001
-            doc_text = f"Candidate document {i} containing dense architectural specifications and metadata. " * 4
-            candidates.append((doc_text, score))
-
-        orig_token_count = count_tokens("\n".join(c[0] for c in candidates))
-
-        # Act: Apply Truncation-Aware Adaptive Knee trimming
-        trimmed = apply_taak_trimming(candidates, k_min=3, k_max=15)
-        trimmed_token_count = count_tokens("\n".join(trimmed))
-
-        # Assert
-        assert len(trimmed) <= 15, f"TAA-k exceeded maximum k_max threshold: {len(trimmed)} > 15"
-        reduction = (orig_token_count - trimmed_token_count) / orig_token_count
-        assert reduction >= 0.50, (
-            f"TAA-k failed to achieve >= 50% token reduction: {reduction * 100:.2f}% "
-            f"({orig_token_count} -> {trimmed_token_count} tokens)"
-        )
+    """Validates token budget limits and savings for seek_symbol and full sessions."""
 
     def test_seek_symbol_token_budget_under_150(self, seeded_symbol_graph):
         """MR-6: SymbolSeekEngine().seek_symbol('RetrievalEngine') tokens < 150."""
@@ -810,11 +556,9 @@ class TestE2ETokenBudget:
         symbols = [
             "RetrievalEngine",
             "SymbolSeekEngine",
-            "HippoRAGPPR",
             "AgentNativeEpisodicDriver",
             "FalkorDBClient",
             "CausalSanitizer",
-            "apply_taak_trimming",
             "extract_symbol_candidates",
         ]
         engine = SymbolSeekEngine()

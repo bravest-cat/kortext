@@ -33,7 +33,6 @@ __all__ = [
     "get_embed_base_url",
     "get_embed_model_name",
     "get_embed_dimension",
-    "get_rerank_base_url",
 ]
 
 _QDRANT_PROBE_CACHE: Optional[Tuple[float, Optional[str]]] = None
@@ -266,7 +265,3 @@ def get_embed_dimension() -> int:
         return 4096
     return 384
 
-
-def get_rerank_base_url() -> str:
-    """Resolve cross-encoder reranker base URL (default 'http://localhost:8000/v1')."""
-    return get_env("RERANK_BASE_URL", "http://localhost:8000/v1") or "http://localhost:8000/v1"

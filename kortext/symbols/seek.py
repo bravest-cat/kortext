@@ -564,8 +564,11 @@ class SymbolSeekEngine:
             fallback_cypher = """
             MATCH (s:Symbol)
             WHERE s.qualified_name CONTAINS $name
+            WITH s LIMIT 25
             OPTIONAL MATCH (s)-[d:DEFINED_IN]->(f:File)
+            WITH s, d, f
             OPTIONAL MATCH (caller:Symbol)-[c:CALLS]->(s)
+            WITH s, d, f, [x IN collect(DISTINCT {caller: caller.name, file: caller.file_path, line: c.line}) WHERE x.caller IS NOT NULL][..6] AS callers
             OPTIONAL MATCH (s)-[out:CALLS]->(callee:Symbol)
             RETURN 
                 s.name AS symbol,
@@ -575,11 +578,11 @@ class SymbolSeekEngine:
                 d.end_line AS end_line,
                 d.signature AS signature,
                 d.docstring AS docstring,
-                [x IN collect(DISTINCT {caller: caller.name, file: caller.file_path, line: c.line}) WHERE x.caller IS NOT NULL][..6] AS callers,
+                callers,
                 [x IN collect(DISTINCT {callee: callee.name, file: callee.file_path}) WHERE x.callee IS NOT NULL][..6] AS callees
             LIMIT 5
             """
-            raw = self.client.query(target_graph, fallback_cypher, params)
+            raw = self.client.query(target_graph, fallback_cypher, params, read_only=True)
 
         # 3. Natural Language Prose & Semantic Fallback: Extract candidates and search against symbol names
         if not raw or len(raw) < 2 or not raw[1]:
@@ -592,7 +595,7 @@ class SymbolSeekEngine:
                 if cand_raw and len(cand_raw) >= 2 and cand_raw[1]:
                     raw = cand_raw
                     break
-                cand_raw = self.client.query(target_graph, fallback_cypher, cand_params)
+                cand_raw = self.client.query(target_graph, fallback_cypher, cand_params, read_only=True)
                 if cand_raw and len(cand_raw) >= 2 and cand_raw[1]:
                     raw = cand_raw
                     break

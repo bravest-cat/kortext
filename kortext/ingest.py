@@ -825,7 +825,7 @@ async def ingest(
         }
 
         # Purge deleted files
-        purged = cache.purge_missing_files(collection, current_files)
+        purged = cache.purge_missing_files(collection, current_files, root=root)
         if purged:
             logger.info(f"[Kortext Ingest] 🗑️  Purging {len(purged)} deleted file(s) from collection '{collection}'...")
             from kortext.symbols import SymbolGraphManager
@@ -1148,6 +1148,29 @@ async def ingest(
             pass
 
 
+def run_cli_ingest(root: str, force: bool = False, **kwargs: Any) -> None:
+    """CLI ingest. When the kortext daemon holds embedded Qdrant, the daemon does the indexing."""
+    from kortext._env import is_qdrant_embedded_mode
+    from kortext._qdrant import is_embedded_qdrant_locked
+
+    if is_qdrant_embedded_mode() and is_embedded_qdrant_locked():
+        from kortext import daemon
+
+        args = {"path": os.path.abspath(root)}
+        if kwargs.get("collection"):
+            args["collection"] = kwargs["collection"]
+        if kwargs.get("symbols_graph"):
+            args["symbols_graph"] = kwargs["symbols_graph"]
+        if kwargs.get("extra_excludes"):
+            args["exclude_patterns"] = kwargs["extra_excludes"]
+        if force:
+            print("Note: --force is ignored when the daemon indexes; it re-indexes changed files only.")
+        result = asyncio.run(daemon.call_tool("index_directory", args))
+        print(result.content[0].text if result.content else result)
+        return
+    asyncio.run(ingest(root=root, force=force, **kwargs))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Kortext: batch ingest codebase into Qdrant & FalkorDB")
     parser.add_argument("--root", default=".", help="Root directory to ingest")
@@ -1157,14 +1180,12 @@ def main():
     parser.add_argument("--force", action="store_true", help="Force full re-index ignoring cache")
     args = parser.parse_args()
 
-    asyncio.run(
-        ingest(
-            root=args.root,
-            extra_excludes=args.exclude,
-            collection=args.collection,
-            force=args.force,
-            symbols_graph=args.symbols_graph,
-        )
+    run_cli_ingest(
+        args.root,
+        force=args.force,
+        extra_excludes=args.exclude,
+        collection=args.collection,
+        symbols_graph=args.symbols_graph,
     )
 
 

@@ -1,15 +1,9 @@
 """
-Kortext 5-Signal Hybrid RRF Retrieval Pipeline Orchestrator:
-  Signal 1: Deterministic AST Symbol Seek (FalkorDB kortext_symbols B-Tree)
-  Signal 2: BM25 Sparse Lexical Vectors (FastEmbed / Qdrant)
-  Signal 3: Dense Semantic Vectors (FastEmbed / Qwen3 / Qdrant)
-  Signal 4: HippoRAG Associative Personalized PageRank (FalkorDB Subgraphs)
-  Signal 5: Bi-Temporal Recency / Validity Filter (FalkorDB Episodic)
-
-Followed by:
-  - Reciprocal Rank Fusion (RRF with k=60, adaptive weights)
-  - Truncation-Aware Adaptive Knee (TAA-k) Trimming
-  - Stage 2 Qwen3 Cross-Encoder Reranking
+Hybrid retrieval: four signals fused with weighted Reciprocal Rank Fusion (k=60).
+  1. AST symbol seek (FalkorDB symbol graph)
+  2. BM25 sparse vectors (FastEmbed, Qdrant)
+  3. Dense vectors (FastEmbed or an OpenAI-compatible endpoint, Qdrant)
+  4. Current episodic facts (FalkorDB, valid-time filtered)
 """
 
 from __future__ import annotations
@@ -35,7 +29,6 @@ from kortext._env import (
     get_int_env,
     get_qdrant_collection,
     get_qdrant_url,
-    get_rerank_base_url,
 )
 from kortext._home import get_kortext_home
 from kortext.embeddings import get_dense_embedder
@@ -54,17 +47,15 @@ from kortext.retrieval.fusion import (
     W_AST,
     W_BM25,
     W_DENSE,
-    W_HIPPO,
     W_TEMPORAL,
     FederatedRetrievalResult,
     apply_knapsack_mmr,
     compute_adaptive_weights,
+    extract_passage_text,
     rank_candidates_rrf,
     redistribute_ci_weights,
     redistribute_weights,
 )
-from kortext.retrieval.hipporag import HippoRAGPPR
-from kortext.retrieval.knee_trimmer import apply_taak_trimming, extract_passage_text
 from kortext.retrieval.query_parser import (
     _CALL_PARENS_PATTERN,
     _CAMEL_CASE_PATTERN,
@@ -78,7 +69,6 @@ from kortext.retrieval.query_parser import (
     resolve_symbol_graph_for_collection,
     resolve_workspace_root_for_collection,
 )
-from kortext.retrieval.reranker import RerankerEngine
 from kortext.symbols.seek import extract_symbol_candidates
 
 logger = logging.getLogger("kortext.retrieval")
@@ -116,7 +106,6 @@ def get_sparse_model() -> Optional[SparseTextEmbedding]:
 
 # Backward-compatible environment and directory constants
 EMBED_BASE_URL: str = (get_embed_base_url() or "http://127.0.0.1:8000/v1").replace("://localhost", "://127.0.0.1")
-RERANK_BASE_URL: str = get_rerank_base_url().replace("://localhost", "://127.0.0.1")
 _INITIAL_QDRANT_URL: str = get_qdrant_url()
 QDRANT_URL: str = _INITIAL_QDRANT_URL
 KORTEXT_HOME = get_kortext_home()
@@ -127,26 +116,21 @@ DEFAULT_DATABASE: str = get_falkordb_database()
 DEFAULT_SYMBOLS_GRAPH: str = get_falkordb_symbols_graph()
 
 TOP_K_RETRIEVE: int = get_int_env("RETRIEVE_TOP_K", 30)
-TOP_K_RERANK: int = get_int_env("RERANK_TOP_K", 5)
+TOP_K_RESULTS: int = get_int_env("RETRIEVE_RESULTS", 5)
 
 # Aliases for backward compatibility
 _is_file_in_workspace = is_file_in_workspace
 
 
 class RetrievalEngine:
-    """
-    Manages 5-Signal Hybrid Reciprocal Rank Fusion (RRF) with TAA-k adaptive trimming
-    and cross-encoder reranking over Qdrant, FalkorDB, and HippoRAG.
-    """
+    """Hybrid RRF retrieval over Qdrant (dense, BM25) and FalkorDB (symbols, episodic facts)."""
 
     def __init__(self):
         self._client: AsyncQdrantClient | None = None
-        self._hippo = HippoRAGPPR()
         self._falkordb = get_shared_falkordb_client()
         self._candidate_metadata: Dict[str, Dict[str, Any]] = {}
         self._meta_lock = asyncio.Lock()
         self._inflight_embeds: Dict[str, asyncio.Task] = {}
-        self.reranker = RerankerEngine()
         self._symbol_seek = None
         self._episodic = None
 
@@ -296,20 +280,14 @@ class RetrievalEngine:
         if not self._client or not dense_vec:
             return []
         col_dim = await self._get_collection_dense_dim(col_name)
-        if isinstance(col_dim, int) and len(dense_vec) in (384, 768, 1024, 1536, 4096) and col_dim != len(dense_vec):
-            if os.getenv("KORTEXT_ADAPT_EMBED_DIM", "0") == "1" and col_dim > 0:
-                if len(dense_vec) < col_dim:
-                    dense_vec = list(dense_vec) + [0.0] * (col_dim - len(dense_vec))
-                else:
-                    dense_vec = list(dense_vec[:col_dim])
-            else:
-                logger.warning(
-                    "Collection '%s' dense vector dim (%d) != query vector dim (%d); skipping dense leg and relying on sparse/AST/HippoRAG.",
-                    col_name,
-                    col_dim,
-                    len(dense_vec),
-                )
-                return []
+        if isinstance(col_dim, int) and col_dim != len(dense_vec):
+            # Vectors from different models are not comparable; padding or truncating them gives noise.
+            logger.error(
+                "Collection '%s' holds %d-d vectors but the active embedder (%s) makes %d-d ones; dense search is off "
+                "for it. Re-index the collection, or restore the EMBED_BASE_URL/EMBED_MODEL_NAME it was built with.",
+                col_name, col_dim, get_embed_model_name(), len(dense_vec),
+            )
+            return []
         target_meta = candidate_metadata if candidate_metadata is not None else self._candidate_metadata
         try:
             response = await self._client.query_points(
@@ -542,88 +520,6 @@ class RetrievalEngine:
                     matches.append(passage)
         return matches
 
-    def _fetch_hippo_subgraph(self, seeds: List[str]) -> List[str]:
-        if not seeds:
-            return []
-        try:
-            ppr_results = self._hippo.retrieve_associative_subgraph(
-                seeds, top_k=8, graph_name=DEFAULT_DATABASE
-            )
-            valid_nodes = (
-                [(node_name, score) for node_name, score in ppr_results if score >= 0.01]
-                if ppr_results
-                else []
-            )
-            passages: List[str] = []
-            if getattr(self._falkordb, "_is_live_falkor_client", False) is True:
-                if valid_nodes:
-                    score_map = dict(valid_nodes)
-                    batch_cypher = """
-                    UNWIND $names AS n_name
-                    MATCH (e:Entity {name: n_name})-[r:RELATES_TO]->(t:Entity)
-                    WHERE coalesce(r.superseded, false) = false AND coalesce(r.dormant, false) = false
-                    RETURN e.name, r.relation, t.name, r.fact
-                    LIMIT 16
-                    """
-                    res = self._falkordb.query(
-                        DEFAULT_DATABASE, batch_cypher, {"names": [n for n, _ in valid_nodes]}
-                    )
-                    if res and len(res) > 1 and res[1]:
-                        for row in res[1]:
-                            sc = score_map.get(str(row[0]), 0.05)
-                            passages.append(
-                                f"[Associative Knowledge Graph (Score: {sc:.3f})]\n"
-                                f"Entity `{row[0]}` {row[1]} `{row[2]}`: {row[3]}"
-                            )
-                if len(passages) < 4:
-                    sym_ppr = self._hippo.retrieve_associative_subgraph(
-                        seeds, top_k=6, graph_name=DEFAULT_SYMBOLS_GRAPH
-                    )
-                    sym_valid = (
-                        [(n, s) for n, s in sym_ppr if s >= 0.01]
-                        if sym_ppr
-                        else (valid_nodes or [(s, 0.05) for s in seeds[:4]])
-                    )
-                    sym_score_map = dict(sym_valid)
-                    sym_cypher = """
-                    UNWIND $names AS s_name
-                    MATCH (s:Symbol {name: s_name})-[r:DEFINED_IN]->(f:File)
-                    RETURN s.name, s.kind, f.path, r.line, r.signature
-                    LIMIT 8
-                    """
-                    sym_res = self._falkordb.query(
-                        DEFAULT_SYMBOLS_GRAPH, sym_cypher, {"names": [n for n, _ in sym_valid]}
-                    )
-                    if sym_res and len(sym_res) > 1 and sym_res[1]:
-                        for s_row in sym_res[1]:
-                            sc = sym_score_map.get(str(s_row[0]), 0.05)
-                            sig = f" — `{s_row[4]}`" if len(s_row) > 4 and s_row[4] else ""
-                            passages.append(
-                                f"[Associative Symbol Graph (Score: {sc:.3f})]\n"
-                                f"Symbol `{s_row[0]}` ({s_row[1]}) defined in `{s_row[2]}:{s_row[3]}`{sig}"
-                            )
-                return passages
-
-            if not valid_nodes:
-                return []
-            for node_name, score in valid_nodes:
-                cypher = """
-                MATCH (e:Entity {name: $name})-[r:RELATES_TO]->(t:Entity)
-                RETURN e.name, r.relation, t.name, r.fact
-                LIMIT 2
-                """
-                res = self._falkordb.query(DEFAULT_DATABASE, cypher, {"name": node_name})
-                if res and len(res) > 1 and res[1]:
-                    for row in res[1]:
-                        passages.append(
-                            f"[Associative Knowledge Graph (Score: {score:.3f})]\n"
-                            f"Entity `{row[0]}` {row[1]} `{row[2]}`: {row[3]}"
-                        )
-            return passages
-        except Exception as exc:
-            logger.debug(f"HippoRAG retrieval non-critical error: {exc}")
-            return []
-
     def _fetch_temporal_facts(
         self,
         prompt: str,
@@ -704,8 +600,8 @@ class RetrievalEngine:
         self,
         signals: List[Tuple[List[Any], float]] | Dict[str, List[Any]],
         candidate_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
-        retention_weight: float = 1.0,
         weights: Optional[Dict[str, float]] = None,
+        query: Optional[str] = None,
     ) -> List[Tuple[str, float]]:
         if candidate_metadata is not None:
             meta_lookup = dict(candidate_metadata)
@@ -714,8 +610,8 @@ class RetrievalEngine:
         return rank_candidates_rrf(
             signals=signals,
             candidate_metadata=meta_lookup,
-            retention_weight=retention_weight,
             weights=weights,
+            query=query,
         )
 
     async def retrieve(
@@ -730,9 +626,8 @@ class RetrievalEngine:
         self,
         prompt: str,
         collection: Optional[str | List[str]] = None,
-        retention_weight: float = 1.0,
         weights: Optional[Dict[str, float]] = None,
-        top_k: int = TOP_K_RERANK,
+        top_k: int = TOP_K_RESULTS,
         limit: Optional[int] = None,
         suppress_ast_signal: bool = False,
         suppress_temporal_signal: bool = False,
@@ -771,14 +666,13 @@ class RetrievalEngine:
             if suppress_ast_signal
             else loop.run_in_executor(None, self._fetch_ast_matches, candidates)
         )
-        hippo_task = loop.run_in_executor(None, self._fetch_hippo_subgraph, candidates)
         temporal_task = (
             None
             if suppress_temporal_signal
             else loop.run_in_executor(None, self._fetch_temporal_facts, prompt, None, local_metadata)
         )
 
-        gather_tasks = [dense_vec_task, sparse_vec_task, hippo_task]
+        gather_tasks = [dense_vec_task, sparse_vec_task]
         if ast_task is not None:
             gather_tasks.append(ast_task)
         if temporal_task is not None:
@@ -787,9 +681,8 @@ class RetrievalEngine:
         gathered_res = await asyncio.gather(*gather_tasks)
         dense_vec = gathered_res[0]
         sparse_res = gathered_res[1]
-        hippo_passages = gathered_res[2]
 
-        idx = 3
+        idx = 2
         if ast_task is not None:
             ast_passages = gathered_res[idx]
             idx += 1
@@ -809,7 +702,6 @@ class RetrievalEngine:
             return meta.get("chunk_type") == "ast_skeleton"
 
         if suppress_ast_signal:
-            hippo_passages = [p for p in hippo_passages if not _is_ast_passage(p)]
             temporal_passages = [p for p in temporal_passages if not _is_ast_passage(p)]
 
         sparse_indices, sparse_values = sparse_res if sparse_res else ([], [])
@@ -877,14 +769,13 @@ class RetrievalEngine:
             (ast_passages, active_weights.get("ast", W_AST)),
             (sparse_passages, active_weights.get("bm25", W_BM25)),
             (dense_passages, active_weights.get("dense", W_DENSE)),
-            (hippo_passages, active_weights.get("hippo", W_HIPPO)),
             (temporal_passages, active_weights.get("temporal", W_TEMPORAL)),
         ]
 
         ranked_candidates = self._rank_candidates(
             all_signals,
             candidate_metadata=local_metadata,
-            retention_weight=retention_weight,
+            query=prompt,
         )
         if not ranked_candidates:
             return []
@@ -894,29 +785,7 @@ class RetrievalEngine:
             if not ranked_candidates:
                 return []
 
-        # Stage 2: Cross-Encoder Reranking BEFORE TAA-k Knee Trimming so semantic hits ranked 4..15 are evaluated
-        pool_limit = max(15, top_k)
-        candidates_list = [
-            {
-                "text": p,
-                "score": float(sc),
-                "metadata": local_metadata.get(p, {}),
-            }
-            for p, sc in ranked_candidates[:pool_limit]
-        ]
-        reranked = await self.reranker.rerank(prompt, candidates_list, top_k=pool_limit)
-        score_lookup = dict(ranked_candidates)
-        reranked_scored = [
-            (c["text"], float(c.get("score", score_lookup.get(c["text"], 0.0))))
-            for c in reranked
-            if isinstance(c, dict) and "text" in c
-        ]
-        trimmed_passages = apply_taak_trimming(
-            reranked_scored or ranked_candidates,
-            k_min=min(max(3, top_k), len(reranked_scored or ranked_candidates)),
-            k_max=max(15, top_k),
-        )
-        passages = trimmed_passages[:top_k]
+        passages = [p for p, _ in ranked_candidates[:top_k]]
         if suppress_ast_signal:
             passages = [p for p in passages if not _is_ast_passage(p)]
         return passages
@@ -1028,9 +897,6 @@ class RetrievalEngine:
         if self._client:
             await self._client.close()
             self._client = None
-        reranker = getattr(self, "reranker", None)
-        if reranker is not None:
-            await reranker.close()
 
 
 _DEFAULT_RETRIEVAL_ENGINE: Optional[RetrievalEngine] = None
@@ -1066,7 +932,6 @@ __all__ = [
     "federated_query",
     "get_sparse_model",
     "extract_passage_text",
-    "apply_taak_trimming",
     "is_ci_mode",
     "is_symbolic_query",
     "is_file_in_workspace",
@@ -1082,18 +947,16 @@ __all__ = [
     "W_AST",
     "W_BM25",
     "W_DENSE",
-    "W_HIPPO",
     "W_TEMPORAL",
     "K_RRF",
     "DEFAULT_FUSION_WEIGHTS",
     "SYMBOLIC_FUSION_WEIGHTS",
     "PROSE_FUSION_WEIGHTS",
     "EMBED_BASE_URL",
-    "RERANK_BASE_URL",
     "QDRANT_URL",
     "DEFAULT_COLLECTION",
     "DEFAULT_DATABASE",
     "DEFAULT_SYMBOLS_GRAPH",
     "TOP_K_RETRIEVE",
-    "TOP_K_RERANK",
+    "TOP_K_RESULTS",
 ]

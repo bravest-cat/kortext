@@ -1,60 +1,50 @@
 """
-5-Signal Reciprocal Rank Fusion (RRF), adaptive weights, and Knapsack MMR diversity.
+4-signal Reciprocal Rank Fusion (RRF), adaptive weights, and Knapsack MMR diversity.
 
-Combines deterministic AST symbols, lexical BM25, dense semantics, associative HippoRAG,
-and bi-temporal recency modulated by Stretched Weibull Decay.
+Combines deterministic AST symbols, lexical BM25, dense semantics and current episodic facts.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from kortext.chunking.token_utils import count_tokens
 from kortext.retrieval.query_parser import is_ci_mode, is_symbolic_query
-from kortext.retrieval.retention import (
-    DEFAULT_FLOOR,
-    compute_age_hours,
-    compute_weibull_retention,
-)
 
 logger = logging.getLogger("kortext.retrieval.fusion")
 
-# Signal Weights for 5-Signal RRF
-W_AST: float = 0.30
-W_BM25: float = 0.20
-W_DENSE: float = 0.25
-W_HIPPO: float = 0.15
+W_AST: float = 0.35
+W_BM25: float = 0.25
+W_DENSE: float = 0.30
 W_TEMPORAL: float = 0.10
 K_RRF: int = 60
 
-DEFAULT_FUSION_WEIGHTS: Dict[str, float] = {
-    "ast": W_AST,          # 0.30
-    "bm25": W_BM25,        # 0.20
-    "dense": W_DENSE,      # 0.25
-    "hippo": W_HIPPO,      # 0.15
-    "temporal": W_TEMPORAL,# 0.10
-}
+DEFAULT_FUSION_WEIGHTS: Dict[str, float] = {"ast": W_AST, "bm25": W_BM25, "dense": W_DENSE, "temporal": W_TEMPORAL}
+# Code queries favour exact symbols and lexical matches; prose favours dense vectors and facts.
+SYMBOLIC_FUSION_WEIGHTS: Dict[str, float] = {"ast": 0.45, "bm25": 0.28, "dense": 0.17, "temporal": 0.10}
+PROSE_FUSION_WEIGHTS: Dict[str, float] = {"ast": 0.15, "bm25": 0.20, "dense": 0.45, "temporal": 0.20}
 
-# Symbolic / Code queries elevate AST (>= 0.35) and BM25 lexical precision
-SYMBOLIC_FUSION_WEIGHTS: Dict[str, float] = {
-    "ast": 0.40,
-    "bm25": 0.25,
-    "dense": 0.15,
-    "hippo": 0.10,
-    "temporal": 0.10,
-}
 
-# Prose / Conceptual queries elevate associative HippoRAG and semantic dense vectors
-PROSE_FUSION_WEIGHTS: Dict[str, float] = {
-    "ast": 0.10,
-    "bm25": 0.15,
-    "dense": 0.35,
-    "hippo": 0.25,
-    "temporal": 0.15,
-}
+def extract_passage_text(payload: Dict[str, Any]) -> str:
+    """Text of a Qdrant point payload: 'text', LlamaIndex '_node_content', 'document', else the JSON payload."""
+    if not payload:
+        return ""
+    if "text" in payload:
+        return str(payload["text"])
+    if "_node_content" in payload:
+        try:
+            nc = json.loads(payload["_node_content"])
+            if "text" in nc:
+                return str(nc["text"])
+        except (ValueError, TypeError) as exc:
+            logger.debug("Undecodable _node_content payload: %s", exc)
+    if "document" in payload:
+        return str(payload["document"])
+    return json.dumps(payload, default=str)
 
 
 def redistribute_weights(
@@ -95,15 +85,7 @@ def compute_adaptive_weights(
     dense_available: bool = True,
     suppress_ast_signal: bool = False,
 ) -> Dict[str, float]:
-    """
-    Computes adaptive 5-signal RRF weights based on query type (symbolic vs prose)
-    and environmental availability (CI mode or dense embedder offline).
-
-    - If query is symbolic/code-oriented: elevates AST (>= 0.35) and BM25.
-    - If query is prose/conceptual: maintains or elevates HippoRAG and semantic weights.
-    - If CI mode is enabled or dense_available=False: redistributes dense weight mass.
-    - If suppress_ast_signal=True: zeros out AST weight and redistributes its mass.
-    """
+    """RRF weights by query type, with the mass of unavailable signals (dense offline, AST suppressed) redistributed."""
     if ci_mode is None:
         ci_mode = is_ci_mode()
 
@@ -124,47 +106,19 @@ def compute_adaptive_weights(
     return weights
 
 
-def _extract_item_passage_and_meta(
-    item: Any,
-) -> Tuple[str, Optional[float], Optional[int], Dict[str, Any]]:
-    """Normalizes candidate items into (passage, age_hours, importance, metadata)."""
-    item_age: Optional[float] = None
-    item_imp: Optional[int] = None
-    item_meta_dict: Dict[str, Any] = {}
-
+def _passage_and_meta(item: Any) -> Tuple[str, Dict[str, Any]]:
+    """Normalizes a candidate (str, (str, meta), dict or object with .text) into (passage, metadata)."""
     if isinstance(item, str):
-        return item, None, None, {}
-
+        return item, {}
     if isinstance(item, tuple):
-        passage = str(item[0])
-        if len(item) > 1:
-            if isinstance(item[1], dict):
-                item_meta_dict.update(item[1])
-            elif isinstance(item[1], (int, float)):
-                item_age = float(item[1])
-        if len(item) > 2:
-            try:
-                item_imp = int(item[2])
-            except (ValueError, TypeError):
-                logger.debug("Suppressed non-fatal exception")
-        return passage, item_age, item_imp, item_meta_dict
-
+        return str(item[0]), dict(item[1]) if len(item) > 1 and isinstance(item[1], dict) else {}
     if isinstance(item, dict):
-        passage = str(item.get("text") or item.get("passage") or item.get("document") or item)
-        item_meta_dict.update(item)
+        meta = dict(item)
         if isinstance(item.get("metadata"), dict):
-            item_meta_dict.update(item["metadata"])
-        return passage, item_age, item_imp, item_meta_dict
-
-    passage = getattr(item, "text", None) or getattr(item, "passage", str(item))
-    for attr in ("age_hours", "delta_hours", "delta_t", "importance", "timestamp", "created_at", "valid_from"):
-        val = getattr(item, attr, None)
-        if val is not None:
-            item_meta_dict[attr] = val
-    item_metadata_attr = getattr(item, "metadata", None)
-    if isinstance(item_metadata_attr, dict):
-        item_meta_dict.update(item_metadata_attr)
-    return passage, item_age, item_imp, item_meta_dict
+            meta.update(item["metadata"])
+        return str(item.get("text") or item.get("passage") or item.get("document") or item), meta
+    meta = getattr(item, "metadata", None)
+    return str(getattr(item, "text", None) or getattr(item, "passage", item)), dict(meta) if isinstance(meta, dict) else {}
 
 
 def compute_length_penalty(passage: str, pivot_chars: int = 500, alpha: float = 0.5) -> float:
@@ -175,8 +129,6 @@ def compute_length_penalty(passage: str, pivot_chars: int = 500, alpha: float = 
     """
     if not passage:
         return 1.0
-    import math
-
     char_len = len(passage)
     if char_len <= pivot_chars:
         return 1.0
@@ -201,21 +153,15 @@ def has_exact_lexical_identifier_match(passage: str, query: Optional[str]) -> bo
 def rank_candidates_rrf(
     signals: List[Tuple[List[Any], float]] | Dict[str, List[Any]],
     candidate_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
-    retention_weight: float = 1.0,
     weights: Optional[Dict[str, float]] = None,
     query: Optional[str] = None,
 ) -> List[Tuple[str, float]]:
     """
-    Merges and scores candidates across retrieval tiers using
-    Reciprocal Rank Fusion (RRF) modulated by Stretched Weibull Decay retention,
-    logarithmic length normalization ("Semantic Sponge" defense), and Lexical Match Floor.
-
-    Score per candidate:
-        score(c) = sum_{tier} ( w_tier / (K_RRF + rank) ) * effective_retention(c) * length_penalty(c)
+    Weighted Reciprocal Rank Fusion with a length penalty for long chunks and a boost for
+    exact identifier matches:  score(c) = sum_tier w_tier / (K_RRF + rank) * length_penalty * lex_boost
     """
     rrf_scores: Dict[str, float] = {}
-    bm25_top_scores: Dict[str, float] = {}
-    meta_lookup = dict(candidate_metadata) if candidate_metadata else {}
+    meta_lookup = candidate_metadata or {}
 
     if isinstance(signals, dict):
         active_weights = dict(weights) if weights is not None else dict(DEFAULT_FUSION_WEIGHTS)
@@ -229,63 +175,20 @@ def rank_candidates_rrf(
         signal_list = signals
         bm25_items = signal_list[1][0] if len(signal_list) > 1 else []
 
-    for rank, b_item in enumerate(bm25_items[:3]):
-        b_pass, _, _, _ = _extract_item_passage_and_meta(b_item)
-        bm25_top_scores[b_pass] = (1.0 / (K_RRF + rank + 1))
-
     for items, weight in signal_list:
         for rank, item in enumerate(items):
-            passage, item_age, item_imp, item_meta_dict = _extract_item_passage_and_meta(item)
-
-            meta: Dict[str, Any] = dict(meta_lookup.get(passage, {}))
-            meta.update(item_meta_dict)
-
-            age_hours = item_age if item_age is not None else (
-                meta.get("age_hours") or meta.get("delta_hours")
-            )
-            if age_hours is None and "delta_t" in meta and "lam" not in meta:
-                raw_dt = meta["delta_t"]
-                if isinstance(raw_dt, (int, float)):
-                    age_hours = raw_dt if raw_dt < 1e5 else raw_dt / 3600.0
-
-            if age_hours is None:
-                ts = meta.get("timestamp") or meta.get("created_at") or meta.get("valid_from")
-                if ts is not None:
-                    age_hours = compute_age_hours(ts)
-
-            importance = item_imp if item_imp is not None else meta.get("importance", 5)
-
-            if "delta_t" in meta and "lam" in meta:
-                retention = compute_weibull_retention(
-                    delta_t=meta["delta_t"],
-                    lam=meta["lam"],
-                    k=meta.get("k", 0.65),
-                    strength=meta.get("strength", 1.0),
-                    floor=meta.get("floor", DEFAULT_FLOOR),
-                )
-            elif age_hours is not None:
-                retention = compute_weibull_retention(
-                    delta_hours=age_hours,
-                    importance=importance,
-                    strength=meta.get("strength", 1.0),
-                )
-            else:
-                retention = 1.0
-
-            rw = meta.get("retention_weight", retention_weight)
-            effective_retention = (1.0 - rw) + (rw * retention)
+            passage, item_meta = _passage_and_meta(item)
+            meta = {**meta_lookup.get(passage, {}), **item_meta}
             len_mod = compute_length_penalty(passage) if meta.get("apply_length_penalty", len(passage) > 1200) else 1.0
             lex_boost = 1.15 if (query and has_exact_lexical_identifier_match(passage, query)) else 1.0
-            score = (weight / (K_RRF + (rank + 1))) * effective_retention * len_mod * lex_boost
-            rrf_scores[passage] = rrf_scores.get(passage, 0.0) + score
+            rrf_scores[passage] = rrf_scores.get(passage, 0.0) + (weight / (K_RRF + rank + 1)) * len_mod * lex_boost
 
-    if query and bm25_top_scores:
-        for b_pass, b_base in bm25_top_scores.items():
+    # Floor for exact identifier hits in BM25's top 3, so a precise lexical match is not outvoted.
+    if query:
+        for rank, b_item in enumerate(bm25_items[:3]):
+            b_pass, _ = _passage_and_meta(b_item)
             if b_pass in rrf_scores and has_exact_lexical_identifier_match(b_pass, query):
-                rrf_scores[b_pass] = max(rrf_scores[b_pass], b_base * 0.92)
-
-    if not rrf_scores:
-        return []
+                rrf_scores[b_pass] = max(rrf_scores[b_pass], 0.92 / (K_RRF + rank + 1))
 
     return sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
 

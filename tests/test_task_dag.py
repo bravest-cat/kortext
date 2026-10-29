@@ -66,7 +66,7 @@ class TestTaskDAGTracker:
         assert t_id.startswith("task_")
         assert tracker.client.query.called
         # Verify params passed to create task included dep_list
-        create_call = tracker.client.query.call_args_list[0]
+        create_call = next(c for c in tracker.client.query.call_args_list if "MERGE (t:Task" in c[0][1])
         params = create_call[0][2]
         assert params["status"] == "pending"
         assert params["dep_list"] == ["task_dep1", "task_dep2"]

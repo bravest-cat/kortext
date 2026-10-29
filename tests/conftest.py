@@ -1540,6 +1540,13 @@ def _isolate_locked_live_qdrant_session():
 
 
 @pytest.fixture
+def real_falkordb():
+    """Skips tests whose queries the regex FalkorDB emulator cannot answer (episodic search)."""
+    if _SEATBELT_BLOCKED:
+        pytest.skip("needs a real FalkorDB on 127.0.0.1:6379")
+
+
+@pytest.fixture
 def seeded_symbol_graph():
     """
     Ensures the default seed symbols exist in the kortext_symbols graph, written through the

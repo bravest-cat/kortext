@@ -109,18 +109,6 @@ export const runDream = (project = 'kortext', purgeStale = false) =>
     body: JSON.stringify({ project, purge_stale: purgeStale }),
   });
 
-// 10. Continuous Learning (InstinctStore), Grounded Invariants & Context Telemetry
-export const getInstincts = (project = null) => {
-  const params = new URLSearchParams();
-  if (project && project !== 'all') params.append('project', project);
-  const qs = params.toString();
-  return fetchJson(qs ? `/api/instincts?${qs}` : '/api/instincts');
-};
-export const promoteInstinct = (id) =>
-  fetchJson('/api/instincts/promote', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id }),
-  });
+// 10. Grounded invariants and context telemetry
 export const getGroundedInvariants = () => fetchJson('/api/invariants/grounded');
 export const getContextTelemetry = () => fetchJson('/api/context/telemetry');

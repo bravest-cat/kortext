@@ -1,13 +1,9 @@
-"""Retrieval package: Qdrant, LlamaIndex, and Qwen3 reranker."""
+"""Retrieval package: hybrid RRF over Qdrant and FalkorDB."""
 from typing import Any
-from .retention import compute_weibull_retention, compute_age_hours
 
 __all__ = [
     "RetrievalEngine",
-    "RerankerEngine",
     "discover_vector_collections",
-    "compute_weibull_retention",
-    "compute_age_hours",
     "federated_query",
     "FederatedRetrievalResult",
     "apply_knapsack_mmr",
@@ -29,9 +25,6 @@ def __getattr__(name: str) -> Any:
     if name == "discover_vector_collections":
         from .discovery import discover_vector_collections
         return discover_vector_collections
-    if name == "RerankerEngine":
-        from .reranker import RerankerEngine
-        return RerankerEngine
     if name in _ENGINE_ATTRS:
         from . import engine as _engine
         return getattr(_engine, name)

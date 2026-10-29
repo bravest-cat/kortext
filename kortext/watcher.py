@@ -495,6 +495,11 @@ class DebouncedChangeHandler(FileSystemEventHandler):
             if f.name.endswith(own_suffix):
                 continue
             try:
+                if json.loads(f.read_text(encoding="utf-8")).get("attempts"):
+                    continue  # a failed re-index the daemon is retrying with backoff
+            except (OSError, ValueError):
+                pass
+            try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 target_path = data.get("path")
                 if target_path and not self._should_ignore(target_path):

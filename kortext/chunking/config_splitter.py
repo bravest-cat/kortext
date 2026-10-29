@@ -60,15 +60,24 @@ class ConfigSectionSplitter:
             except Exception:
                 logger.debug("Suppressed non-fatal exception")
 
-        # Fallback to single chunk or raw text
+        # Unparsed text: windows of whole lines, each with its true character offsets.
         header = f"# File: {file_path}\n# Config File\n\n"
-        return [{
-            "text": header + text[:2048],
-            "scope": "config",
-            "chunk_type": "config_section",
-            "start_char": 0,
-            "end_char": len(text),
-        }]
+        chunks: List[Dict[str, Any]] = []
+        start = 0
+        while start < len(text):
+            end = min(len(text), start + 2048)
+            if end < len(text):
+                nl = text.rfind("\n", start, end)
+                end = nl + 1 if nl > start else end
+            chunks.append({
+                "text": header + text[start:end],
+                "scope": "config",
+                "chunk_type": "config_section",
+                "start_char": start,
+                "end_char": end,
+            })
+            start = end
+        return chunks or [{"text": header, "scope": "config", "chunk_type": "config_section", "start_char": 0, "end_char": 0}]
 
     def _split_dict_sections(self, data: Dict[str, Any], file_path: str, fmt: str) -> List[Dict[str, Any]]:
         chunks = []

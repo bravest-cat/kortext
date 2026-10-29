@@ -153,8 +153,7 @@ export async function loadTelemetry() {
       if (rssEl) rssEl.innerText = `${t.substrate_ram_rss_mb} MB RSS`;
       if (latEl) latEl.innerText = `${t.falkordb_latency_ms} ms`;
       if (invEl && t.active_invariants !== undefined) {
-        const inst = t.instincts_count ? ` • ${t.instincts_count} Instincts` : '';
-        invEl.innerText = `${t.active_invariants} Verified${inst}`;
+        invEl.innerText = `${t.active_invariants} Verified`;
       }
       const ctxEl = document.getElementById('hud-context-window');
       if (ctxEl && t.context_window) {
@@ -169,7 +168,7 @@ export async function loadTelemetry() {
       renderHooksStatusUI(t.nextgen_hooks);
       loadQuarantine();
       loadContextTelemetry();
-      loadInstinctsAndInvariants();
+      loadGroundedInvariants();
     }
   } catch (err) {
     console.warn('Telemetry load error:', err);
@@ -384,50 +383,13 @@ export async function loadContextTelemetry() {
   }
 }
 
-// Continuous Learning (InstinctStore) & Grounded Invariants Manager
-export async function loadInstinctsAndInvariants() {
-  const instContainer = document.getElementById("instincts-manager-list");
+// Grounded invariants audit
+export async function loadGroundedInvariants() {
   const invContainer = document.getElementById("grounded-invariants-list");
-  const instBadge = document.getElementById("instincts-count-badge");
   const invBadge = document.getElementById("invariants-drift-badge");
 
   try {
-    const [instData, invData] = await Promise.all([
-      api.getInstincts(state.activeProject),
-      api.getGroundedInvariants(),
-    ]);
-
-    if (instData.status === "ok") {
-      const list = instData.instincts || [];
-      if (instBadge) instBadge.textContent = `${list.length} Learned`;
-      if (instContainer) {
-        if (list.length === 0) {
-          instContainer.innerHTML = "<div class=\"text-slate-400 text-xs font-mono py-4 text-center\">No instincts recorded yet. PostToolUse error->fix transitions populate this automatically.</div>";
-        } else {
-          instContainer.innerHTML = list.slice(0, 12).map(inst => {
-            const confPct = Math.round((inst.confidence || 0) * 100);
-            const trust = inst.trust_level || "speculative";
-            const safeId = escapeHtml(inst.id || "");
-            const isVerified = ["tool_confirmed", "verified", "user_approved", "system"].includes(trust);
-            const badgeCls = isVerified
-              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-              : "bg-amber-500/10 text-amber-300 border-amber-500/30";
-            return `
-              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5 font-mono text-xs">
-                <div class="flex items-center justify-between gap-2">
-                  <span class="font-bold text-indigo-300 truncate">${escapeHtml(inst.pattern || inst.id)}</span>
-                  <div class="flex items-center gap-1.5 shrink-0">
-                    <span class="text-[10px] px-1.5 py-0.5 rounded border ${badgeCls}">${escapeHtml(trust)} (${confPct}%)</span>
-                    <button data-instinct-id="${safeId}" onclick="promoteInstinctById(this.dataset.instinctId)" class="px-2 py-0.5 rounded bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 text-[10px] border border-indigo-500/40 transition">Promote</button>
-                  </div>
-                </div>
-                <div class="text-slate-300 text-[11px]">${escapeHtml(inst.action || "")}</div>
-              </div>
-            `;
-          }).join("");
-        }
-      }
-    }
+    const invData = await api.getGroundedInvariants();
 
     if (invData.status === "ok") {
       const audit = invData.drift_audit || {};
@@ -457,21 +419,6 @@ export async function loadInstinctsAndInvariants() {
       }
     }
   } catch (err) {
-    console.warn("Instincts/Invariants load error:", err);
-  }
-}
-
-export async function promoteInstinctById(id) {
-  if (!id) return;
-  try {
-    const res = await api.promoteInstinct(id);
-    if (res.status === "ok") {
-      toast(`Promoted instinct ${id} to user_approved`, "success");
-      loadInstinctsAndInvariants();
-    } else {
-      toast(`Promotion failed: ${res.message || "error"}`, "error");
-    }
-  } catch (err) {
-    toast("Promote instinct error: " + err.message, "error");
+    console.warn("Invariants load error:", err);
   }
 }

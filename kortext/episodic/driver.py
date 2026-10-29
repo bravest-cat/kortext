@@ -1,48 +1,70 @@
 """
-Agent-Native Episodic Memory Driver for FalkorDB.
+Episodic memory driver for FalkorDB.
 
-Eliminates the :8003 LLM proxy daemon completely.
-The main Antigravity agent supplies structured entities, facts, and supersedes directly,
-or passes a narrative which is embedded via local oMLX :8000 (Metal GPU) and committed
-directly to FalkorDB via native GraphBLAS commands.
+The agent supplies entities, facts and supersessions directly; nothing calls an LLM.
+Search scores current facts by dense similarity (lexical coverage when no embedder is
+available) and abstains when nothing clears the threshold.
 """
 from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
 import redis
 
 from kortext.falkordb_client import FalkorDBClient, FALKORDB_HOST, FALKORDB_PORT, FALKORDB_PASS
-from kortext.retrieval.retention import compute_weibull_retention
 from kortext.trust.sanitizer import CausalSanitizer, SecurityViolation
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_fact_age_hours(
-    valid_from: Optional[str],
-    created_at: Optional[str],
-    now_dt: datetime,
-) -> tuple[float, str]:
-    """Calculates elapsed age in hours based on valid_from or created_at, returning (age_hours, sort_key)."""
-    ts_str = valid_from or created_at or ""
-    if not ts_str:
-        return 0.0, ""
+_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "from", "that", "this", "what", "where", "when", "which", "who",
+    "whom", "whose", "how", "why", "are", "was", "were", "has", "have", "had", "does", "did", "can",
+    "could", "would", "should", "into", "about", "over", "after", "before", "between", "under",
+    "their", "there", "they", "them", "his", "her", "its", "our", "your", "any", "all", "is", "do",
+})
+# Minimum score for a result. Calibrated for BAAI/bge-small-en-v1.5 on tests/fixtures/longmemeval_sample.json
+# (unanswerable questions topped out at 0.405, answerable ones started at 0.444).
+# shortcut: one threshold per process, recalibrate with KORTEXT_EPISODIC_MIN_SCORE when EMBED_BASE_URL points at another model.
+DENSE_MIN_SCORE = float(os.getenv("KORTEXT_EPISODIC_MIN_SCORE", "0.42"))
+LEXICAL_MIN_SCORE = float(os.getenv("KORTEXT_EPISODIC_MIN_LEXICAL", "0.25"))
+# Results this close to the best score count as ties and are ordered newest first, so an update outranks the fact it replaced.
+RECENCY_TIE_MARGIN = 0.02
+_CANDIDATE_LIMIT = 300
+
+
+def _content_tokens(text: str) -> List[str]:
+    return [w for w in re.split(r"\W+", (text or "").lower()) if len(w) > 2 and w not in _STOPWORDS]
+
+
+def _strip_names(text: str, names: List[str]) -> str:
+    """Removes entity names so similarity measures what is said about an entity, not who it is."""
+    for name in sorted({n for n in names if n and len(n) > 2}, key=len, reverse=True):
+        text = re.sub(re.escape(name) + r"(?:'s)?", " ", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _dense_embedder() -> Optional[Any]:
+    """The configured dense embedder, or None when only the hash fallback is available."""
     try:
-        clean_ts = ts_str.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(clean_ts)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        elapsed_seconds = (now_dt - dt).total_seconds()
-        age_hours = max(0.0, elapsed_seconds / 3600.0)
-        return age_hours, ts_str
-    except Exception:
-        return 0.0, ts_str
+        from kortext.embeddings import _OfflineDeterministicEmbeddingModel, get_dense_embedder
+
+        emb = get_dense_embedder()
+        model = getattr(emb, "model", None)
+        if isinstance(model, _OfflineDeterministicEmbeddingModel):
+            return None
+        return emb
+    except Exception as exc:
+        logger.warning("Dense embedder unavailable for episodic search, using lexical scoring: %s", exc)
+        return None
 
 
 def jaro_winkler_similarity(s1: str, s2: str, p: float = 0.1) -> float:
@@ -757,185 +779,146 @@ class AgentNativeEpisodicDriver:
         self,
         query: str,
         limit: int = 5,
-        max_hops: int = 1,
         project: Optional[str] = None,
         workspace_root: Optional[str] = None,
         **kwargs: Any,
     ) -> List[str]:
         """
-        Retrieves temporally valid, non-superseded facts from FalkorDB.
-        Filters out superseded historical facts. Modulates ranking via Weibull retention decay.
-        Supports 2-hop multi-session traversal when max_hops >= 2.
-        Supports project-scoping when project is provided and != 'all'.
+        Returns up to `limit` current facts and episodes relevant to `query`, best first.
+        Superseded, dormant and expired facts are excluded. Returns [] when nothing scores
+        above the threshold, so an unanswerable question gets no answer.
         """
-        _STOPWORDS = {
-            "the", "and", "for", "with", "from", "that", "this", "what", "where",
-            "when", "which", "who", "how", "why", "are", "was", "were", "has",
-            "have", "had", "does", "did", "can", "could", "would", "should", "into",
-            "about", "over", "after", "before", "between", "under", "their", "there",
-        }
-        raw_words = [w for w in re.split(r"\W+", (query or "").lower()) if len(w) > 2]
-        q_tokens = [w for w in raw_words if w not in _STOPWORDS] or raw_words
+        q_tokens = _content_tokens(query)
         if not q_tokens:
             return []
-
-        now_dt = datetime.now(timezone.utc)
-
-        if not project and "collection" in kwargs and isinstance(kwargs["collection"], str):
+        if not project and isinstance(kwargs.get("collection"), str):
             project = kwargs["collection"]
-
         target_project = project.strip() if isinstance(project, str) else None
         filter_project = bool(target_project and target_project.lower() != "all")
-
-        # 1. Fetch facts matching query terms where NOT superseded and NOT dormant
-        results: List[str] = []
-        proj_filter = "AND coalesce(r.project, 'kortext') = $project " if filter_project else ""
-        cypher = (
-            "MATCH (s:Entity)-[r:RELATES_TO]->(t:Entity) "
-            "WHERE coalesce(r.superseded, false) = false "
-            "AND coalesce(r.dormant, false) = false "
-            + proj_filter +
-            "AND ANY(tok IN $tokens WHERE toLower(coalesce(r.fact, s.name + ' ' + r.relation + ' ' + t.name)) CONTAINS tok "
-            "OR toLower(s.name) CONTAINS tok OR toLower(t.name) CONTAINS tok) "
-            "RETURN coalesce(r.fact, s.name + ' ' + r.relation + ' ' + t.name), s.name, t.name, r.valid_from, r.created_at, r.importance, r.confidence "
-            "ORDER BY coalesce(r.valid_from, r.created_at, '') DESC "
-            "LIMIT 50"
-        )
-        params: Dict[str, Any] = {"tokens": q_tokens}
+        now = datetime.now(timezone.utc).isoformat()
+        params: Dict[str, Any] = {"tokens": q_tokens, "now": now, "lim": _CANDIDATE_LIMIT}
         if filter_project:
             params["project"] = target_project
-        rows = self._query(cypher, params)
-        if rows and len(rows) > 1 and isinstance(rows[1], list):
-            scored = []
-            for row in rows[1]:
-                if row:
-                    fact_str = str(row[0])
-                    s_name = str(row[1]) if len(row) > 1 and row[1] else ""
-                    t_name = str(row[2]) if len(row) > 2 and row[2] else ""
-                    v_from = str(row[3]) if len(row) > 3 and row[3] else ""
-                    c_at = str(row[4]) if len(row) > 4 and row[4] else ""
-                    try:
-                        importance = int(row[5]) if len(row) > 5 and row[5] is not None else 5
-                    except (ValueError, TypeError):
-                        importance = 5
-                    try:
-                        confidence = float(row[6]) if len(row) > 6 and row[6] is not None else 0.95
-                    except (ValueError, TypeError):
-                        confidence = 0.95
 
-                    f_lower = (fact_str + " " + s_name + " " + t_name).lower()
-                    token_overlap_score = sum(3 for tok in q_tokens if tok in f_lower)
-                    if token_overlap_score > 0:
-                        age_hours, sort_key = _parse_fact_age_hours(v_from, c_at, now_dt)
-                        retention = compute_weibull_retention(age_hours, importance=importance)
-                        score_eff = token_overlap_score * retention * confidence
-                        scored.append((score_eff, sort_key, fact_str))
-            scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-            results.extend([f for _, _, f in scored[:limit]])
+        fact_rows = self._query(
+            "MATCH (s:Entity)-[r:RELATES_TO]->(t:Entity) "
+            "WHERE coalesce(r.superseded, false) = false AND coalesce(r.dormant, false) = false "
+            "AND (r.valid_to IS NULL OR r.valid_to > $now) "
+            + ("AND coalesce(r.project, 'kortext') = $project " if filter_project else "")
+            + "AND ANY(tok IN $tokens WHERE toLower(coalesce(r.fact, '')) CONTAINS tok "
+            "OR toLower(s.name) CONTAINS tok OR toLower(t.name) CONTAINS tok) "
+            "RETURN r.id, coalesce(r.fact, s.name + ' ' + r.relation + ' ' + t.name), s.name, t.name, "
+            "coalesce(r.valid_from, r.created_at, ''), r.emb, r.relation "
+            "ORDER BY coalesce(r.valid_from, r.created_at, '') DESC LIMIT $lim",
+            params,
+        )
+        ep_rows = self._query(
+            "MATCH (e:Episodic) WHERE coalesce(e.superseded, false) = false "
+            + ("AND coalesce(e.project, 'kortext') = $project " if filter_project else "")
+            + "AND ANY(tok IN $tokens WHERE toLower(e.name + ' ' + coalesce(e.content, '')) CONTAINS tok) "
+            "RETURN e.name, e.content, coalesce(e.created_at, ''), e.emb "
+            "ORDER BY coalesce(e.created_at, '') DESC LIMIT $lim",
+            params,
+        )
 
-        # 1b. If max_hops >= 2 and results < limit, search 2-hop connected facts
-        if max_hops >= 2 and len(results) < limit:
-            proj_filter_2hop = "AND coalesce(r2.project, 'kortext') = $project " if filter_project else ""
-            cypher_2hop = (
-                "MATCH (s:Entity)-[r1:RELATES_TO]->(mid:Entity)-[r2:RELATES_TO]->(t:Entity) "
-                "WHERE coalesce(r1.superseded, false) = false "
-                "AND coalesce(r1.dormant, false) = false "
-                "AND coalesce(r2.superseded, false) = false "
-                "AND coalesce(r2.dormant, false) = false "
-                + proj_filter_2hop +
-                "AND ANY(tok IN $tokens WHERE toLower(coalesce(r2.fact, mid.name + ' ' + r2.relation + ' ' + t.name)) CONTAINS tok "
-                "OR toLower(mid.name) CONTAINS tok OR toLower(t.name) CONTAINS tok) "
-                "RETURN coalesce(r2.fact, mid.name + ' ' + r2.relation + ' ' + t.name), s.name, mid.name, t.name, r2.valid_from, r2.created_at, r2.importance, r2.confidence "
-                "ORDER BY coalesce(r2.valid_from, r2.created_at, '') DESC "
-                "LIMIT 50"
-            )
-            params_2hop: Dict[str, Any] = {"tokens": q_tokens}
-            if filter_project:
-                params_2hop["project"] = target_project
-            rows2 = self._query(cypher_2hop, params_2hop)
-            if rows2 and len(rows2) > 1 and isinstance(rows2[1], list):
-                scored2 = []
-                for row in rows2[1]:
-                    if row:
-                        fact_str = str(row[0])
-                        s_name = str(row[1]) if len(row) > 1 and row[1] else ""
-                        mid_name = str(row[2]) if len(row) > 2 and row[2] else ""
-                        t_name = str(row[3]) if len(row) > 3 and row[3] else ""
-                        v_from = str(row[4]) if len(row) > 4 and row[4] else ""
-                        c_at = str(row[5]) if len(row) > 5 and row[5] else ""
-                        try:
-                            importance = int(row[6]) if len(row) > 6 and row[6] is not None else 5
-                        except (ValueError, TypeError):
-                            importance = 5
-                        try:
-                            confidence = float(row[7]) if len(row) > 7 and row[7] is not None else 0.95
-                        except (ValueError, TypeError):
-                            confidence = 0.95
+        # (kind, key, display text, text to score, names, timestamp, stored embedding)
+        cands: List[Tuple[str, str, str, str, List[str], str, Any]] = []
+        slots: List[Optional[Tuple[str, str]]] = []
+        for row in (fact_rows[1] if fact_rows and len(fact_rows) > 1 else []) or []:
+            fid, fact, sub, obj, ts, emb, rel = (list(row) + [None] * 7)[:7]
+            cands.append(("fact", str(fid or ""), str(fact), str(fact), [str(sub or "")], str(ts or ""), emb))
+            slots.append((str(sub or "").lower(), str(rel or "").lower()))
+        for row in (ep_rows[1] if ep_rows and len(ep_rows) > 1 else []) or []:
+            name, content, ts, emb = (list(row) + [None] * 4)[:4]
+            text = f"{name}: {content or ''}"
+            cands.append(("episode", str(name), f"[{name}]: {str(content or '')[:200]}", text, [], str(ts or ""), emb))
+            slots.append(None)
+        if not cands:
+            return []
 
-                        f_lower = (fact_str + " " + s_name + " " + mid_name + " " + t_name).lower()
-                        token_overlap_score = sum(3 for tok in q_tokens if tok in f_lower)
-                        if token_overlap_score > 0 and fact_str not in results:
-                            age_hours, sort_key = _parse_fact_age_hours(v_from, c_at, now_dt)
-                            retention = compute_weibull_retention(age_hours, importance=importance)
-                            score_eff = token_overlap_score * retention * confidence
-                            scored2.append((score_eff, sort_key, fact_str))
-                scored2.sort(key=lambda x: (x[0], x[1]), reverse=True)
-                for _, _, f in scored2:
-                    if f not in results and len(results) < limit:
-                        results.append(f)
+        names = sorted({n for c in cands for n in c[4] if n})
+        stripped_query = _strip_names(query, names) or query
+        scores = self._score_candidates(stripped_query, cands)
 
-        # 2. Also retrieve matching non-superseded episodic descriptions
-        if len(results) < limit:
-            proj_filter_ep = "AND coalesce(e.project, 'kortext') = $project " if filter_project else ""
-            cypher_ep = (
-                "MATCH (e:Episodic) "
-                "WHERE (e.superseded IS NULL OR e.superseded = false) "
-                + proj_filter_ep +
-                "AND ANY(tok IN $tokens WHERE toLower(e.name + ' ' + coalesce(e.content, '')) CONTAINS tok) "
-                "RETURN e.name, e.content, e.created_at, e.trust_score "
-                "ORDER BY coalesce(e.created_at, '') DESC "
-                "LIMIT 30"
-            )
-            params_ep: Dict[str, Any] = {"tokens": q_tokens}
-            if filter_project:
-                params_ep["project"] = target_project
-            ep_rows = self._query(cypher_ep, params_ep)
-            if ep_rows and len(ep_rows) > 1 and isinstance(ep_rows[1], list):
-                ep_scored = []
-                for row in ep_rows[1]:
-                    if len(row) >= 2:
-                        name, content = str(row[0]), str(row[1])
-                        c_at = str(row[2]) if len(row) > 2 and row[2] else ""
-                        try:
-                            conf = float(row[3]) if len(row) > 3 and row[3] is not None else 0.95
-                        except (ValueError, TypeError):
-                            conf = 0.95
-
-                        text_lower = (name + " " + content).lower()
-                        token_overlap_score = sum(2 for tok in q_tokens if tok in text_lower)
-                        if token_overlap_score > 0:
-                            summary = f"[{name}]: {content[:200]}"
-                            age_hours, sort_key = _parse_fact_age_hours(None, c_at, now_dt)
-                            retention = compute_weibull_retention(age_hours, importance=5)
-                            score_eff = token_overlap_score * retention * conf
-                            ep_scored.append((score_eff, sort_key, summary))
-                ep_scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-                for _, _, s in ep_scored:
-                    if s not in results and len(results) < limit:
-                        results.append(s)
-
+        scored = [(sc, c[5], c[2], slot) for sc, c, slot in zip(scores, cands, slots) if sc is not None]
+        if not scored:
+            return []
+        best = max(x[0] for x in scored)
+        ties = sorted((x for x in scored if x[0] >= best - RECENCY_TIE_MARGIN), key=lambda x: x[1], reverse=True)
+        rest = sorted((x for x in scored if x[0] < best - RECENCY_TIE_MARGIN), key=lambda x: x[0], reverse=True)
+        ordered = ties + rest
+        # Facts sharing a (subject, relation) slot keep their slot's positions but go newest first:
+        # a later value for the same relation replaces the earlier one at the top.
+        by_slot: Dict[Tuple[str, str], List[int]] = {}
+        for i, x in enumerate(ordered):
+            if x[3] is not None:
+                by_slot.setdefault(x[3], []).append(i)
+        for positions in by_slot.values():
+            newest_first = sorted((ordered[i] for i in positions), key=lambda x: x[1], reverse=True)
+            for i, x in zip(positions, newest_first):
+                ordered[i] = x
+        results: List[str] = []
+        for _, _, text, _ in ordered:
+            if text not in results:
+                results.append(text)
+            if len(results) >= limit:
+                break
         return results
+
+    def _score_candidates(self, query: str, cands: List[Tuple[str, str, str, str, List[str], str, Any]]) -> List[Optional[float]]:
+        """Scores each candidate; None for those under the threshold."""
+        q_tokens = set(_content_tokens(query))
+        doc_tokens = [set(_content_tokens(_strip_names(c[3], c[4]))) for c in cands]
+        # IDF over the candidate pool, so a word every candidate shares counts for little.
+        n = len(cands)
+        idf = {t: math.log(1 + n / (1 + sum(1 for d in doc_tokens if t in d))) for t in q_tokens}
+        q_mass = sum(idf.values()) or 1.0
+        lexical = [sum(idf[t] for t in q_tokens & d) / q_mass for d in doc_tokens]
+
+        embedder = _dense_embedder()
+        if embedder is None:
+            logger.warning("Episodic search is using lexical scoring only; recall on paraphrased questions is low.")
+            return [s if s >= LEXICAL_MIN_SCORE else None for s in lexical]
+
+        q_vec = np.asarray(embedder.embed_query(query), dtype=np.float32)
+        vecs: List[Optional[np.ndarray]] = [
+            np.asarray(c[6], dtype=np.float32) if isinstance(c[6], list) and len(c[6]) == len(q_vec) else None
+            for c in cands
+        ]
+        missing = [i for i, v in enumerate(vecs) if v is None]
+        if missing:
+            fresh = embedder.embed_documents([_strip_names(cands[i][3], cands[i][4]) or cands[i][3] for i in missing])
+            for i, vec in zip(missing, fresh):
+                vecs[i] = np.asarray(vec, dtype=np.float32)
+                self._store_embedding(cands[i][0], cands[i][1], [float(x) for x in vec])
+        q_norm = float(np.linalg.norm(q_vec)) or 1.0
+        out: List[Optional[float]] = []
+        for v, lex in zip(vecs, lexical):
+            cos = float(np.dot(q_vec, v) / (q_norm * (float(np.linalg.norm(v)) or 1.0)))
+            score = 0.8 * cos + 0.2 * lex
+            out.append(score if score >= DENSE_MIN_SCORE else None)
+        return out
+
+    def _store_embedding(self, kind: str, key: str, vec: List[float]) -> None:
+        """Caches a candidate's embedding on its edge or node so later searches skip the model."""
+        if not key:
+            return
+        try:
+            if kind == "fact":
+                self._query("MATCH ()-[r:RELATES_TO {id: $id}]->() SET r.emb = $emb", {"id": key, "emb": vec})
+            else:
+                self._query("MATCH (e:Episodic {name: $id}) SET e.emb = $emb", {"id": key, "emb": vec})
+        except Exception as exc:
+            logger.debug("Embedding cache write skipped for %s: %s", key, exc)
 
     async def delete_fact(self, fact_id: str, reason: str, match_substring: bool = False) -> None:
         """
         Marks an episodic node or fact relation as superseded.
-        Resolves session-scoped integer aliases ([F1], F1) and requires >=12 chars (or match_substring=True)
-        before falling back to substring matching so short generic words never mass-purge the graph.
+        Requires >=12 chars (or match_substring=True) before falling back to substring matching
+        so short generic words never mass-purge the graph.
         """
         now = datetime.now(timezone.utc).isoformat()
-        raw_id = (fact_id or "").strip()
-        alias_map = getattr(self, "_session_fact_aliases", {}) or {}
-        resolved_id = alias_map.get(raw_id, alias_map.get(raw_id.strip("[]"), raw_id))
+        resolved_id = (fact_id or "").strip()
         allow_sub = bool(match_substring or len(resolved_id) >= 12)
 
         self._query(
@@ -949,95 +932,6 @@ class AgentNativeEpisodicDriver:
             "SET r.superseded = true, r.dormant = true, r.superseded_reason = $reason, r.superseded_at = $now",
             {"id": resolved_id, "reason": reason, "now": now, "allow_sub": allow_sub},
         )
-
-    def query_seeded_facts(
-        self,
-        question: str,
-        seeded_facts: List[Dict[str, Any]],
-        top_k: int = 5,
-    ) -> List[str]:
-        """
-        Scores and ranks bi-temporal episodic facts against a natural-language question using
-        domain-general lexical/hypernym expansion, Weibull recency weighting, and temporal intent detection.
-        Also populates session-scoped integer aliases ([F1], [F2], ...) for deterministic supersession.
-        """
-        _STOPWORDS = {
-            "what", "where", "when", "which", "who", "whom", "whose", "why", "how",
-            "does", "did", "is", "are", "was", "were", "has", "have", "had", "the",
-            "a", "an", "in", "on", "at", "to", "for", "of", "with", "by", "from",
-            "about", "into", "after", "before", "user", "currently", "current",
-            "now", "today", "presently", "latest", "recent", "recently", "prefer",
-            "prefers", "preferred", "use", "uses", "used", "using", "their", "they",
-        }
-        _GENERAL_EXPANSIONS = {
-            "beverage": {"drink", "coffee", "tea", "matcha", "espresso"},
-            "doctorate": {"phd", "degree", "graduated", "university"},
-            "neighborhood": {"district", "area", "moved", "relocated", "lives", "apartment"},
-            "editor": {"ide", "neovim", "vscode", "cursor", "zed"},
-            "database": {"postgres", "postgresql", "sqlite", "redis", "falkordb", "qdrant"},
-            "language": {"python", "rust", "typescript", "golang", "java"},
-            "framework": {"fastapi", "react", "nextjs", "django", "flask"},
-            "allergy": {"allergic", "peanuts", "shellfish", "dietary"},
-            "instrument": {"piano", "guitar", "violin", "cello", "music"},
-            "pet": {"dog", "cat", "retriever", "adopted"},
-        }
-        q_lower = (question or "").lower()
-        raw_words = [w for w in re.split(r"\W+", q_lower) if len(w) >= 2]
-        q_words = [w for w in raw_words if w not in _STOPWORDS] or raw_words
-        expanded_terms = set(q_words)
-        for w in list(q_words):
-            for k, syns in _GENERAL_EXPANSIONS.items():
-                if w == k or w.rstrip("s") == k or k in w:
-                    expanded_terms.update(syns)
-                elif w in syns:
-                    expanded_terms.add(k)
-                    expanded_terms.update(syns)
-
-        wants_latest = any(
-            t in q_lower
-            for t in ("current", "currently", "now", "today", "latest", "recent", "switched", "moved", "updated")
-        )
-        wants_historical = any(
-            t in q_lower
-            for t in ("originally", "previously", "before", "initial", "first", "used to", "why", "reason")
-        )
-
-        scored: List[Tuple[float, int, str, str]] = []
-        for idx, item in enumerate(seeded_facts):
-            if not isinstance(item, dict):
-                continue
-            if item.get("superseded") and not wants_historical:
-                continue
-            fact_text = str(item.get("fact") or "")
-            subj = str(item.get("subject") or "")
-            rel = str(item.get("relation") or "")
-            obj = str(item.get("object") or item.get("target") or "")
-            fid = str(item.get("fact_id") or item.get("id") or f"fact_{idx + 1}")
-            combined = f"{subj} {rel} {obj} {fact_text}".lower()
-            c_words = set(re.split(r"\W+", combined))
-
-            direct_hits = sum(3.0 for w in q_words if w in c_words or (len(w) >= 4 and w in combined))
-            syn_hits = sum(1.5 for w in (expanded_terms - set(q_words)) if w in c_words or (len(w) >= 4 and w in combined))
-            score = direct_hits + syn_hits
-            if score <= 0:
-                continue
-
-            if wants_latest and ("[session 2]" in combined or idx > 0):
-                score += 1.5
-            elif wants_historical and "[session 1]" in combined:
-                score += 1.5
-
-            scored.append((score, idx, fid, fact_text))
-
-        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-        if not hasattr(self, "_session_fact_aliases") or not isinstance(self._session_fact_aliases, dict):
-            self._session_fact_aliases = {}
-        results: List[str] = []
-        for rank_idx, (_, _, fid, f_txt) in enumerate(scored[:top_k], 1):
-            self._session_fact_aliases[f"F{rank_idx}"] = fid
-            self._session_fact_aliases[f"[F{rank_idx}]"] = fid
-            results.append(f_txt)
-        return results
 
     async def close(self) -> None:
         """Close FalkorDB connection."""

@@ -346,6 +346,25 @@ def _check_invariants_sync() -> tuple[Optional[Dict[str, Any]], Optional[Excepti
         return None, e
 
 
+def reindex_spool_status(limit: int = 5) -> Dict[str, Any]:
+    """Counts queued and dead-lettered re-index events; lists the newest failures."""
+    import json
+
+    from kortext._home import get_kortext_home
+
+    spool = get_kortext_home() / "spool"
+    failed = sorted((spool / "failed").glob("event_*.json"), key=lambda f: f.stat().st_mtime, reverse=True) if (spool / "failed").is_dir() else []
+    recent: List[Dict[str, Any]] = []
+    for f in failed[:limit]:
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            recent.append({"path": d.get("path"), "attempts": d.get("attempts"), "error": d.get("last_error")})
+        except (OSError, ValueError):
+            recent.append({"path": None, "error": f"unreadable {f.name}"})
+    pending = len(list((spool / "invalidation").glob("event_*.json"))) if (spool / "invalidation").is_dir() else 0
+    return {"pending": pending, "failed": len(failed), "recent_failures": recent}
+
+
 async def audit_kortext_health(
     include_browser_ui: bool = False,
     include_invariants: bool = True,
@@ -413,6 +432,11 @@ async def audit_kortext_health(
                     f"Run trigger_dream_mode() to review and consolidate."
                 )
 
+    reindex = reindex_spool_status()
+    report["reindex_queue"] = f"{reindex['pending']} pending, {reindex['failed']} failed"
+    if reindex["failed"]:
+        report["reindex_failures"] = reindex["recent_failures"]
+
     services: List[Dict[str, Any]] = [
         {
             "name": "Qdrant Vector Store",
@@ -471,5 +495,10 @@ async def audit_kortext_health(
             report["recommendation"] = down_msg
     elif "recommendation" not in report:
         report["recommendation"] = "✅ All core Kortext services are operational."
+    if reindex["failed"]:
+        report["recommendation"] += (
+            f" ⚠️ {reindex['failed']} file(s) failed to re-index; move their events from spool/failed "
+            "back to spool/invalidation to retry once the cause is fixed."
+        )
 
     return report

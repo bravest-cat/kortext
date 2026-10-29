@@ -21,7 +21,7 @@ keywords = [
   "knowledge-graph", "falkordb", "qdrant", "tree-sitter", "ast", "hipporag"
 ]
 dependencies = [
-  "fastmcp>=2.0",
+  "fastmcp>=4.1",
   "qdrant-client>=1.12.0",
   "fastembed>=0.5.0",
   "redis>=5.0.0",

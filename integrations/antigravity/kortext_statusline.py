@@ -155,14 +155,6 @@ def write_hud_snapshot(
             existing["context_window_size"] = int(context_window_size)
         if exceeds_200k_tokens is not None:
             existing["exceeds_200k_tokens"] = bool(exceeds_200k_tokens)
-        inst_file = kortext_home / "instincts.json"
-        if inst_file.is_file():
-            try:
-                inst_data = json.loads(inst_file.read_text(encoding="utf-8"))
-                if isinstance(inst_data, dict):
-                    existing["instinct_count"] = len(inst_data)
-            except Exception:
-                pass
         existing["updated_at"] = time.time()
 
         if project_id:

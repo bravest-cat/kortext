@@ -94,8 +94,7 @@ Object.assign(window, {
   loadQuarantine: health.loadQuarantine,
   clearQuarantine: health.clearQuarantine,
   loadContextTelemetry: health.loadContextTelemetry,
-  loadInstinctsAndInvariants: health.loadInstinctsAndInvariants,
-  promoteInstinctById: health.promoteInstinctById,
+  loadGroundedInvariants: health.loadGroundedInvariants,
   refreshAll: health.refreshAll,
 
   // Dream Mode

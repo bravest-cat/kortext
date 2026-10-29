@@ -153,39 +153,6 @@ async def clear_quarantine():
         return {"status": "error", "message": str(e), "cleared_count": 0}
 
 
-@router.get("/api/instincts")
-async def get_instincts(project: Optional[str] = None):
-    """Returns learned instincts from InstinctStore with trust_level, confidence, and evidence_count."""
-    from kortext._home import get_kortext_home
-    from kortext.learning.instincts import InstinctStore
-
-    try:
-        store = InstinctStore(storage_path=get_kortext_home() / "instincts.json")
-        items = store.get_active_instincts(min_confidence=0.0, project=project if project and project != "all" else None)
-        return {"status": "ok", "count": len(items), "instincts": items}
-    except Exception as e:
-        return {"status": "error", "message": str(e), "count": 0, "instincts": []}
-
-
-@router.post("/api/instincts/promote")
-async def promote_instinct(payload: Dict[str, Any]):
-    """Approves/promotes an instinct to user_approved trust_level and high confidence."""
-    from kortext._home import get_kortext_home
-    from kortext.learning.instincts import InstinctStore
-
-    try:
-        instinct_id = str(payload.get("id") or "").strip()
-        if not instinct_id:
-            return {"status": "error", "message": "instinct 'id' is required"}
-        store = InstinctStore(storage_path=get_kortext_home() / "instincts.json")
-        updated = store.approve_instinct(instinct_id)
-        if not updated:
-            return {"status": "error", "message": f"Instinct '{instinct_id}' not found"}
-        return {"status": "ok", "instinct": updated}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-
 @router.get("/api/invariants/grounded")
 async def get_grounded_invariants():
     """Returns AST-grounded invariants and their live SHA-256 AST body hash drift status."""
@@ -424,7 +391,7 @@ async def get_telemetry():
     except Exception:
         logger.debug("Suppressed non-fatal exception")
 
-    # Live Context Window & Learned Instincts Telemetry
+    # Live context window telemetry
     context_telemetry: Dict[str, Any] = {}
     try:
         from kortext.hooks.transcript_tokens import resolve_session_token_state
@@ -434,14 +401,6 @@ async def get_telemetry():
     except Exception:
         logger.debug("Context telemetry resolution skipped")
 
-    instincts_count = 0
-    try:
-        from kortext.learning.instincts import InstinctStore
-
-        instincts_count = len(InstinctStore(storage_path=kortext_home / "instincts.json").load_all())
-    except Exception:
-        logger.debug("Instincts count skipped")
-
     return {
         "status": "ok",
         "telemetry": {
@@ -450,12 +409,8 @@ async def get_telemetry():
             "falkordb_latency_ms": lat_ms,
             "falkordb_healthy": falkor_ok,
             "quarantine_count": q_count,
-            "instincts_count": instincts_count,
             "context_window": context_telemetry,
-            "weibull_retention_floor": 0.05,
-            "weibull_beta": 0.65,
-            "weibull_lambda": 72.0,
-            "active_invariants": max(active_inv_count, 6),
+            "active_invariants": active_inv_count,
             "memory_tiers": {
                 "tier_0": {
                     "name": "Tree-sitter AST B-Tree",
@@ -472,20 +427,20 @@ async def get_telemetry():
                 "tier_2": {
                     "name": "FalkorDB Episodic Graph",
                     "status": tier2_status,
-                    "metrics": f"{ep_count:,} episodes, {rel_count:,} facts, {instincts_count} instincts",
+                    "metrics": f"{ep_count:,} episodes, {rel_count:,} facts",
                     "type": "Temporal & Causal Knowledge Graph",
                 },
                 "tier_3": {
                     "name": "Federated Hybrid Engine",
                     "status": tier3_status,
-                    "metrics": "Multi-tier RRF + HippoRAG PPR Fusion",
+                    "metrics": "Weighted RRF over AST, BM25, dense and facts",
                     "type": "Dense + Sparse + Graph Federation",
                 },
                 "tier_4": {
                     "name": "Cognitive Dream Mode",
                     "status": tier4_status,
-                    "metrics": f"{sub_count} Louvain subsystems (Weibull floor: 0.05)",
-                    "type": "Synaptic Decay & Community Clustering",
+                    "metrics": f"{sub_count} Louvain subsystems",
+                    "type": "Pruning & Community Clustering",
                 },
             },
             "nextgen_hooks": active_hooks,

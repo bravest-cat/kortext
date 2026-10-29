@@ -249,6 +249,7 @@ class TestFalkorDBSubstrateResilience:
                 socket_timeout=5.0,
                 socket_connect_timeout=0.5,
                 retry=ANY,
+                max_connections=32,
             )
             mock_instance.ping.assert_called_once()
 
@@ -318,6 +319,7 @@ class TestFalkorDBSubstrateResilience:
                 socket_timeout=5.0,
                 socket_connect_timeout=0.5,
                 retry=ANY,
+                max_connections=32,
             )
 
 

@@ -1,6 +1,6 @@
 /**
  * Kortext Dashboard - Federated 3-Tier Retrieval Lab
- * Concurrent AST symbol seeking, dense/sparse code reranking, and episodic memory synthesis.
+ * Concurrent AST symbol seeking, dense/sparse code retrieval, and episodic memory synthesis.
  */
 
 import { state } from './state.js';
@@ -86,7 +86,7 @@ export async function executeRetrieval() {
       }
     }
 
-    // Tier 1: Reranked Code
+    // Tier 1: Code
     const chunks = data.code_chunks || [];
     const t1Count = document.getElementById('tier1-count');
     if (t1Count) t1Count.textContent = `${chunks.length} chunk${chunks.length === 1 ? '' : 's'}`;
@@ -122,8 +122,7 @@ export async function executeRetrieval() {
           const factText = typeof f === 'string' ? f : (f.fact || f.content || JSON.stringify(f));
           return `
             <div class="p-3 bg-slate-950/70 rounded-xl border border-slate-800 space-y-1 hover:border-purple-500/40 transition">
-              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-800/60">Weibull Active</span>
-              <p class="text-xs text-slate-300 font-mono leading-relaxed pt-1">${escapeHtml(factText)}</p>
+              <p class="text-xs text-slate-300 font-mono leading-relaxed">${escapeHtml(factText)}</p>
             </div>
           `;
         }).join('');
