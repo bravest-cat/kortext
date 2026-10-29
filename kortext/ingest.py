@@ -15,10 +15,10 @@ import fnmatch
 import logging
 import os
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional, Set
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from dotenv import load_dotenv
-from qdrant_client import AsyncQdrantClient, QdrantClient
+from qdrant_client import AsyncQdrantClient
 from qdrant_client import models as qmodels
 
 
@@ -127,7 +127,6 @@ class VectorStoreIndex:
 from kortext._env import (
     get_configured_qdrant_url,
     get_embed_base_url,
-    get_embed_dimension,
     get_embed_model_name,
     get_falkordb_symbols_graph,
     get_qdrant_collection,
@@ -135,7 +134,7 @@ from kortext._env import (
 )
 from kortext._home import get_kortext_home
 from kortext.cache import ChunkEmbeddingCache, IngestCache
-from kortext.chunking.languages import ALL_SUPPORTED_EXTS, SUPPORTED_CODE_EXTS, SUPPORTED_DOC_EXTS
+from kortext.chunking.languages import ALL_SUPPORTED_EXTS, SUPPORTED_DOC_EXTS
 from kortext.embeddings import get_dense_embedder
 from kortext.ingest_collection import setup_collection
 from kortext.server_helpers import SENSITIVE_DIR_NAMES
@@ -385,18 +384,6 @@ async def managed_qdrant_client(
                 await active_client.close()
             except Exception:
                 pass
-
-
-def _create_qdrant_clients(qdrant_url: str = QDRANT_URL):
-    """
-    Returns (AsyncQdrantClient, Optional[QdrantClient]) without dual-locking embedded storage.
-    Never opens two QdrantLocal instances on the same directory in embedded mode.
-    """
-    async_client = _create_async_qdrant_client(qdrant_url)
-    effective_url = get_configured_qdrant_url(probe_local=True)
-    if effective_url:
-        return async_client, QdrantClient(url=effective_url, timeout=10.0)
-    return async_client, None
 
 
 async def index_single_file(

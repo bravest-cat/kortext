@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 try:
     import networkx as nx
     from networkx.algorithms.community import louvain_communities

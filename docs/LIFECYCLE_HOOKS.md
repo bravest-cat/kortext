@@ -42,7 +42,8 @@ Intercepts tool calls (`run_command`, `replace_file_content`, `write_to_file`) *
 | **`AntiRipgrepGate`** | `run_command` | Intercepts broad `rg` or `grep` searches for code symbols. Allows narrow text exceptions (e.g. `pytest`, `journal`, targeted files). | **DENY** with redirect to `seek_symbol(symbol_name=...)`. |
 | **`CommandSafetyGuard`** | `run_command` | Blocks destructive commands (`rm -rf /`, `format c:`, writing directly into `~/.kortext/data/`). | **DENY** with security alert. |
 | **`SecretLeakGuard`** | `run_command`, `write_to_file` | Scans payloads for high-entropy tokens, API keys (`sk-...`, `ghp_...`, AWS keys, PEM private keys). | **DENY** with secret redaction notice. |
-| **`BlastRadiusGuard`** | Code edits | Warns if core architectural files (`server.py`, `driver.py`, `graph.py`) are edited without prior `trace_symbol_impact` analysis. | Advisory warning in stderr. |
+| **`BlastRadiusGuard`** | Code edits | Checks edits to high-impact files (many callers) made without a prior `trace_symbol_impact` or `seek_symbol` on them. | Advisory by default. With `KORTEXT_GATEGUARD_ENFORCE=1` the first such edit is **DENIED** and a retry is allowed. |
+| **`FileOwnershipGuard`** | Code edits | For a task worker (`KORTEXT_TASK_ID` set), checks whether another in_progress task owns the file via `manage_tasks(action="claim_files")`. | **DENY** naming the owning task. |
 
 ### Stage 2: Post-Tool Pipeline (`post_tool`)
 Executes immediately after a tool succeeds:

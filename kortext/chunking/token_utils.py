@@ -56,16 +56,6 @@ def count_tokens(text: str) -> int:
 estimate_tokens = count_tokens
 
 
-def truncate_to_tokens(text: str, max_tokens: int) -> str:
-    """Truncates text to approximately max_tokens."""
-    if not text or max_tokens <= 0:
-        return ""
-    max_chars = max_tokens * 4
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars]
-
-
 _GIT_TEMPORAL_CACHE: Dict[str, tuple[float, Optional[Dict[str, str]]]] = {}
 
 

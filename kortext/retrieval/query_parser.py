@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
-from kortext._env import get_env, get_falkordb_symbols_graph, get_qdrant_url
+from kortext._env import get_env, get_falkordb_symbols_graph
 from kortext._home import get_kortext_home
 
 logger = logging.getLogger("kortext.retrieval.query_parser")

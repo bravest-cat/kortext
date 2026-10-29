@@ -19,7 +19,6 @@ from common import (
     check_http_health,
     check_tcp_port,
     check_unix_socket,
-    emit_hook_response,
     get_hook_payload,
 )
 from kortext._home import get_kortext_home

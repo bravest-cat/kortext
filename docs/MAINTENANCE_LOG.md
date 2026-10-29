@@ -155,3 +155,17 @@ Other hook timings measured at the same baseline (median of 20 cold runs, Falkor
 - Benchmarks: the symbol benchmark helper no longer counts a query's own candidate words as retrieved. Measured on real FalkorDB: HotpotQA-style Recall@5 0.420, MRR 0.490; Golden Set Recall@5 0.775, MRR 0.900 (unchanged by the fix).
 - CI: the Linux substrate job runs on Python 3.11 and 3.13.
 - Tests: `tests/test_audit_followups.py`. Full suite against real FalkorDB and Qdrant: 698 passed, 1 xfailed.
+
+## 17. Slimming, episodic rewrite and the shared daemon (2026-10-29)
+
+- Decisions taken on the audit: delete HippoRAG PPR, the TAA-k knee trimmer, Weibull retention, the reranker client and the instinct store; rewrite episodic search; serve every agy window from one MCP daemon instead of making server-mode Qdrant (Docker) the default; keep failed re-index events; act on the other roadmap items.
+- Episodic search: dense similarity with entity names stripped, IDF lexical term, abstention threshold 0.42 calibrated for bge-small on the LongMemEval fixture, newest-first among near-ties and within a (subject, relation) slot, cached embeddings, lexical fallback. Fixture containment before -> after: extraction 0.75 -> 0.83, updates 0.50 -> 0.50, temporal 0.70 -> 0.80, multi-session 0.10 -> 0.10, abstention 0.00 -> 1.00. Golden-set MRR 0.900 -> 0.879 without PPR.
+- Daemon: `kortext/daemon.py`. `kortext-server` proxies stdio to `127.0.0.1:8767`, starts the daemon behind a spawn lock, and authenticates with `~/.kortext/run/daemon.token`. `KORTEXT_SERVER_MODE=inprocess` is the escape hatch and the fallback.
+- Re-index spool: retried with backoff, dead-lettered to `spool/failed/` after 5 attempts, reported to the agent, `check_kortext_health` and the dashboard HUD.
+- Scoping and DAG: dream pruning per project; macro facts need their entity pair; task ids unique per project; fail-closed cycle check; in_progress-only, path-boundary overlap detection; test proofs bound to the task's command and consumed; `claim_files` plus a PreToolUse ownership guard.
+- Symbols: no homonym CALLS fan-out, aggregated seek fallback, SCIP relationships by qualified name, windowed config chunks.
+- Dashboard: token auth off loopback, no edits to Qdrant's files under the daemon, daemon-backed search, re-index queue, no invented numbers, header overflow fixed.
+- Hooks: per-conversation token telemetry, `invocationNum` as the turn, `stepIdx` and `artifactDirectoryPath` parsed, explicit `enabled` flags, unverified recalled memory fenced.
+- CI: `agy plugin validate --strict`. Tests needing Cypher the emulator cannot answer use the `real_falkordb` fixture.
+- Removed as dead: unused functions and 70 imports, the `RERANK_*`, `LOCAL_LLM_*` and `LLM_*` settings, `KORTEXT_ADAPT_EMBED_DIM`.
+- Not done: 10 KB reply sizing for agy 1.4.7, root-conversation scoping (1.4.4), pass@k harness, glossary and `/retro` skills, Windows and Intel Mac hardware runs, thresholds for embedders other than bge-small.

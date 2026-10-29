@@ -10,7 +10,7 @@ import os
 import socket
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 # Automatically detect KORTEXT_ROOT from environment or script location
 KORTEXT_ROOT = Path(

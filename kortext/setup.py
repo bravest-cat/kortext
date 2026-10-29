@@ -17,20 +17,18 @@ import socket
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from kortext._home import get_kortext_home
 from kortext.binaries import (
     BinaryProvisionResult,
-    PlatformInfo,
     detect_platform,
     generate_falkordb_conf,
     generate_qdrant_yaml,
     pull_falkordb_module,
     pull_qdrant_binary,
-    verify_binary_executable,
 )
 
 logger = logging.getLogger("kortext.setup")

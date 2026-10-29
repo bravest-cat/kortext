@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 import httpx
 
-from kortext._env import get_embed_base_url, get_embed_dimension, get_embed_model_name, get_env
+from kortext._env import get_embed_base_url, get_embed_dimension, get_env
 
 logger = logging.getLogger("kortext.embeddings")
 

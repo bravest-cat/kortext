@@ -115,3 +115,15 @@ jobs:
           CI: "1"
         run: |
           uv run pytest -q tests/test_cli_commands.py tests/test_binaries.py tests/test_retrieval_pipeline.py tests/test_dashboard_routes.py tests/test_graph_views.py tests/test_audit_regressions.py tests/test_audit_fixes.py tests/test_deep_audit_remediations.py tests/test_complete_audit_verification.py
+
+  validate-agy-plugin:
+    name: agy plugin validate --strict
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the Antigravity CLI
+        run: |
+          curl -fsSL https://antigravity.google/cli/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Validate the plugin the way agy loads it
+        run: agy plugin validate --strict integrations/antigravity

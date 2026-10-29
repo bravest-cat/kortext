@@ -92,7 +92,6 @@ def test_kortext_incremental_sync_initialization():
     from kortext.watcher import KortextIncrementalSync
 
     with patch("kortext.watcher.SymbolGraphManager"), \
-         patch("kortext.watcher.AsyncQdrantClient"), \
          patch("kortext.watcher.ChunkEmbeddingCache"), \
          patch("kortext.watcher.IngestCache"):
         syncer = KortextIncrementalSync()

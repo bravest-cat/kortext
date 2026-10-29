@@ -18,7 +18,7 @@ import sys
 import urllib.request
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 from kortext._home import get_kortext_home
 from kortext.hooks.context import HookContext
@@ -324,24 +324,6 @@ class BoostPromptGroundingProbe:
         except Exception as exc:
             logger.debug("BoostPromptGroundingProbe skipped: %s", exc)
             return InterceptorResult.allow()
-
-
-def _estimate_transcript_tokens(
-    steps: Sequence[Any],
-    raw_payload: Any,
-    transcript_path: str = "",
-    model_name: str = "",
-) -> Tuple[int, float, bool]:
-    """Estimates session token usage and context window percentage via hybrid transcript + HUD state engine."""
-    from kortext.hooks.transcript_tokens import resolve_session_token_state
-
-    st = resolve_session_token_state(
-        steps=steps,
-        raw_payload=raw_payload,
-        transcript_path=transcript_path,
-        model_name=model_name,
-    )
-    return st.estimated_tokens, st.used_percentage, st.exceeds_200k
 
 
 class ContextBudgetAdvisor:

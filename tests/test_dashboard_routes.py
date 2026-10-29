@@ -378,44 +378,33 @@ def test_action_create_collection_meta_json_safe(tmp_path, monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
     with (
-        patch("kortext.dashboard.routes.actions._check_remote_qdrant", return_value=False),
-        patch("qdrant_client.QdrantClient") as mock_qdrant,
+        patch("kortext.dashboard.routes.actions._is_sole_custodian_running", return_value=False),
+        patch("kortext.retrieval.qdrant_engine.EmbeddedQdrantEngine.ensure_collection") as mock_ensure,
     ):
         resp = client.post("/api/collections", json={"name": "safe_vector_col"})
         assert resp.status_code == 200
         data = resp.json()
         assert data.get("status") == "ok"
-        assert "created successfully in native embedded Qdrant" in data.get("message", "")
-
-        # Invariant 3 Mandate: No secondary QdrantClient(path=...) instantiated
-        mock_qdrant.assert_not_called()
-
-        # Check meta.json has the collection definition
-        updated_meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        assert "safe_vector_col" in updated_meta["collections"]
-        assert updated_meta["collections"]["safe_vector_col"]["vectors"]["text-dense"]["size"] == 384
+        mock_ensure.assert_any_call("safe_vector_col", embed_dim=384)
+        # meta.json is Qdrant's own file; the dashboard never edits it.
+        assert json.loads(meta_path.read_text(encoding="utf-8")) == {"collections": {}, "aliases": {}}
 
 
-def test_action_create_collection_sole_custodian_safe(tmp_path, monkeypatch):
-    """Verify when sole custodian daemon is running, meta.json is safely provisioned."""
-    import json
+def test_action_create_collection_refused_while_daemon_owns_store(tmp_path, monkeypatch):
+    """While the daemon holds embedded Qdrant, the dashboard neither opens nor edits the store."""
     monkeypatch.setenv("KORTEXT_HOME", str(tmp_path))
     monkeypatch.delenv("QDRANT_URL", raising=False)
 
     with (
         patch("kortext.dashboard.routes.actions._is_sole_custodian_running", return_value=True),
-        patch("kortext.dashboard.routes.actions._check_remote_qdrant", return_value=False),
         patch("qdrant_client.QdrantClient") as mock_qdrant,
     ):
         resp = client.post("/api/collections", json={"name": "custodian_col"})
         assert resp.status_code == 200
-        assert resp.json().get("status") == "ok"
+        assert resp.json().get("status") == "error"
+        assert "index_directory" in resp.json()["message"]
         mock_qdrant.assert_not_called()
-
-        meta_path = tmp_path / "qdrant" / "meta.json"
-        assert meta_path.is_file()
-        updated_meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        assert "custodian_col" in updated_meta["collections"]
+        assert not (tmp_path / "qdrant" / "meta.json").exists()
 
 
 def test_action_create_collection_fallback_locked_error(tmp_path, monkeypatch):
@@ -425,7 +414,6 @@ def test_action_create_collection_fallback_locked_error(tmp_path, monkeypatch):
 
     with (
         patch("kortext.dashboard.routes.actions._is_sole_custodian_running", return_value=False),
-        patch("kortext.dashboard.routes.actions._check_remote_qdrant", return_value=False),
         patch("kortext.retrieval.qdrant_engine.EmbeddedQdrantEngine.ensure_collection") as mock_ensure,
     ):
         import sqlite3

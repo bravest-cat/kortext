@@ -11,12 +11,10 @@ import logging
 import os
 import re
 import textwrap
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from kortext.falkordb_client import get_shared_falkordb_client
-from kortext.symbols.formatter import format_impact_report
 
 logger = logging.getLogger("kortext.symbols.seek")
 
@@ -766,27 +764,4 @@ class SymbolSeekEngine:
             token_budget=token_budget,
         )
         return json.dumps(impact, separators=(",", ":"))
-
-    def _resolve_graph_for_workspace(self, workspace_root: Optional[str] = None) -> str:
-        """
-        Resolves the FalkorDB symbols graph containing files under workspace_root
-        using strictly parameterized Cypher ($ws) to prevent Cypher string injection.
-        """
-        default_sym_graph = os.getenv("KORTEXT_SYMBOLS_GRAPH", os.getenv("FALKORDB_SYMBOLS_GRAPH", "kortext_symbols"))
-        if not workspace_root:
-            return default_sym_graph
-        try:
-            ws_resolved = str(Path(workspace_root).resolve())
-            res = self.client.query(
-                default_sym_graph,
-                "MATCH (f:File) WHERE f.path STARTS WITH $ws RETURN count(f) LIMIT 1",
-                {"ws": ws_resolved},
-                read_only=True,
-            )
-            if res and len(res) > 1 and res[1] and res[1][0] and int(res[1][0][0] or 0) > 0:
-                return default_sym_graph
-        except Exception as exc:
-            logger.debug("Workspace symbol graph resolution fallback: %s", exc)
-        return default_sym_graph
-
 

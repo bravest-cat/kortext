@@ -16,8 +16,6 @@ for p in (str(SCRIPT_DIR), str(REPO_ROOT)):
         sys.path.insert(0, p)
 
 from common import (
-    analyze_transcript_modifications,
-    emit_hook_response,
     get_hook_payload,
     read_transcript_steps,
 )

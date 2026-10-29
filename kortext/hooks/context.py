@@ -53,6 +53,8 @@ class HookContext:
     conversation_id: str = ""
     model_name: str = ""
     last_user_input: str = ""
+    step_idx: int = -1
+    artifact_dir: str = ""
     _cached_steps: Optional[Tuple[Mapping[str, Any], ...]] = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -278,7 +280,7 @@ class HookContext:
         event_name = event or str(parsed.get("event") or "")
 
         turn_index = 0
-        for turn_key in ("invocationNum", "turnIndex", "turn_index", "executionNum"):
+        for turn_key in ("invocationNum", "turnIndex", "turn_index"):
             if turn_key in parsed:
                 try:
                     turn_index = int(parsed[turn_key])
@@ -313,6 +315,8 @@ class HookContext:
             fully_idle=bool(parsed.get("fullyIdle", parsed.get("fully_idle", True))),
             conversation_id=str(parsed.get("conversationId") or parsed.get("conversation_id") or parsed.get("sessionId") or parsed.get("session_id") or ""),
             model_name=str(parsed.get("modelName") or parsed.get("model_name") or parsed.get("model") or ""),
+            step_idx=int(parsed["stepIdx"]) if isinstance(parsed.get("stepIdx"), int) else -1,
+            artifact_dir=str(parsed.get("artifactDirectoryPath") or ""),
             last_user_input=str(
                 parsed.get("lastUserInput")
                 or parsed.get("last_user_input")

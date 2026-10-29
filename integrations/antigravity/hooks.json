@@ -1,5 +1,6 @@
 {
   "kortext-ambient-grounding": {
+    "enabled": true,
     "PreInvocation": [
       {
         "type": "command",
@@ -9,6 +10,7 @@
     ]
   },
   "kortext-runaway-guard": {
+    "enabled": true,
     "PostInvocation": [
       {
         "type": "command",
@@ -18,6 +20,7 @@
     ]
   },
   "kortext-safety-gate": {
+    "enabled": true,
     "PreToolUse": [
       {
         "matcher": "(client:|mcp[:_]+kortext[:_]+|kortext:)?(run_command|grep_search|find_by_name|view_file|replace_file_content|multi_replace_file_content|write_to_file)",
@@ -32,6 +35,7 @@
     ]
   },
   "kortext-cache-invalidation": {
+    "enabled": true,
     "PostToolUse": [
       {
         "matcher": "(client:|mcp[:_]+kortext[:_]+|kortext:)?(run_command|write_to_file|replace_file_content|multi_replace_file_content|seek_symbol|trace_symbol_impact|manage_tasks|record_system_outcome)",
@@ -46,6 +50,7 @@
     ]
   },
   "kortext-dag-stop-guard": {
+    "enabled": true,
     "Stop": [
       {
         "type": "command",

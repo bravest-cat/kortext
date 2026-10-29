@@ -4,7 +4,7 @@ Styling specifications, palette definitions, and node/edge formatting helpers fo
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 DEFAULT_REL_SPEC: Dict[str, Any] = {
     "width": 1.6,

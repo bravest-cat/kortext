@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastembed import SparseTextEmbedding
@@ -36,8 +34,6 @@ from kortext.falkordb_client import get_shared_falkordb_client
 from kortext.retrieval.federated import (
     execute_federated_query,
     fetch_tier3_overview,
-    partition_budgets,
-    resolve_project_scope,
 )
 from kortext.retrieval.fusion import (
     DEFAULT_FUSION_WEIGHTS,
@@ -57,12 +53,7 @@ from kortext.retrieval.fusion import (
     redistribute_weights,
 )
 from kortext.retrieval.query_parser import (
-    _CALL_PARENS_PATTERN,
-    _CAMEL_CASE_PATTERN,
-    _CODE_SYNTAX_PATTERN,
     _COLLECTION_WORKSPACE_CACHE,
-    _DOTTED_SYMBOL_PATTERN,
-    _PROGRAMMING_KEYWORDS_PATTERN,
     is_ci_mode,
     is_file_in_workspace,
     is_symbolic_query,

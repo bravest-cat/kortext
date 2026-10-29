@@ -245,3 +245,60 @@ def test_unqualified_call_does_not_fan_out_to_homonyms(tmp_path):
         assert len(rows) == 1 and rows[0][0].startswith("unresolved::")
     finally:
         mgr._query("MATCH (n) DETACH DELETE n")
+
+
+def test_dashboard_requires_token_off_loopback(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from kortext import daemon
+    from kortext.dashboard import app as dash
+
+    monkeypatch.setenv("KORTEXT_HOME", str(tmp_path))
+    monkeypatch.setattr(dash, "DASHBOARD_HOST", "0.0.0.0")
+    remote = TestClient(dash.app, client=("192.168.1.50", 5000))
+    assert remote.get("/api/graphs").status_code == 401
+    ok = remote.get(f"/?token={daemon.token()}")
+    assert ok.status_code == 200 and "kortext_token" in ok.cookies
+    assert remote.get("/api/graphs").status_code != 401  # cookie carried
+    assert TestClient(dash.app, client=("127.0.0.1", 5000)).get("/api/graphs").status_code != 401  # loopback client needs none
+
+
+def test_token_telemetry_is_per_session(tmp_path):
+    import importlib.util
+
+    from kortext.hooks.transcript_tokens import resolve_session_token_state
+
+    spec = importlib.util.spec_from_file_location(
+        "kortext_statusline", Path(__file__).resolve().parent.parent / "integrations" / "antigravity" / "kortext_statusline.py"
+    )
+    sl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sl)
+    sl.write_hud_snapshot(tmp_path, True, True, False, 0, 0, used_percentage=70.0, total_input_tokens=140_000,
+                          context_window_size=200_000, session_id="window_a")
+    sl.write_hud_snapshot(tmp_path, True, True, False, 0, 0, used_percentage=5.0, total_input_tokens=10_000,
+                          context_window_size=200_000, session_id="window_b")
+    a = resolve_session_token_state(raw_payload={"conversationId": "window_a"}, kortext_home=tmp_path)
+    b = resolve_session_token_state(raw_payload={"conversationId": "window_b"}, kortext_home=tmp_path)
+    c = resolve_session_token_state(raw_payload={"conversationId": "window_c"}, kortext_home=tmp_path)
+    assert a.estimated_tokens >= 140_000 and b.estimated_tokens < 140_000
+    assert c.estimated_tokens < 140_000  # a window without figures never borrows another's
+
+
+@pytest.mark.usefixtures("real_falkordb")
+def test_recalled_unverified_facts_are_fenced():
+    import asyncio
+    import uuid
+
+    from kortext.episodic.driver import AgentNativeEpisodicDriver
+
+    drv = AgentNativeEpisodicDriver(db_name=f"test_fence_{uuid.uuid4().hex[:6]}")
+    try:
+        drv.record_fact("Zorblat", "USES", "Zorblat deploys with blue-green rollouts", object_name="rollouts", trust_level="speculative")
+        drv.record_fact("Zorblat", "OWNS", "Zorblat owns the billing ledger service", object_name="ledger", trust_level="tool_confirmed")
+        out = asyncio.run(drv.search("Zorblat rollouts deploy", limit=5)) + asyncio.run(drv.search("Zorblat billing ledger", limit=5))
+        spec = [o for o in out if "blue-green" in o]
+        conf = [o for o in out if "billing ledger" in o]
+        assert spec and spec[0].startswith("[unverified memory (speculative)")
+        assert conf and not conf[0].startswith("[unverified")
+    finally:
+        drv._query("MATCH (n) DETACH DELETE n")

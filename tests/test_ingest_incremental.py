@@ -81,7 +81,6 @@ async def test_ingest_incremental_only_indexes_changed_files_into_falkordb(tmp_p
 
     with patch("kortext.ingest.SimpleDirectoryReader", return_value=mock_reader), \
          patch("kortext.ingest.AsyncQdrantClient", return_value=mock_client), \
-         patch("kortext.ingest.QdrantClient"), \
          patch("kortext.ingest.IngestCache", return_value=mock_cache), \
          patch("kortext.symbols.SymbolGraphManager", return_value=mock_symbol_graph), \
          patch("kortext.chunking.ast_splitter.ASTCodeSplitter", return_value=mock_ast_splitter), \
@@ -488,7 +487,6 @@ async def test_ingest_workspace_purges_deleted_files_from_falkordb_symbol_graph(
 
     with patch("kortext.ingest.SimpleDirectoryReader", return_value=mock_reader), \
          patch("kortext.ingest.AsyncQdrantClient", return_value=mock_client), \
-         patch("kortext.ingest.QdrantClient"), \
          patch("kortext.ingest.IngestCache", return_value=mock_cache), \
          patch("kortext.symbols.SymbolGraphManager", return_value=mock_symbol_graph):
 
@@ -635,7 +633,6 @@ async def test_index_workspace_skips_large_and_binary_files(tmp_path):
 
     with patch("kortext.ingest.SimpleDirectoryReader", return_value=mock_reader), \
          patch("kortext.ingest.AsyncQdrantClient", return_value=mock_client), \
-         patch("kortext.ingest.QdrantClient"), \
          patch("kortext.ingest.IngestCache", return_value=mock_cache), \
          patch("kortext.symbols.SymbolGraphManager", return_value=mock_symbol_graph), \
          patch("kortext.chunking.ast_splitter.ASTCodeSplitter", return_value=mock_ast_splitter), \
@@ -813,7 +810,6 @@ async def test_index_workspace_streams_in_bounded_batches(tmp_path):
     with patch.dict(os.environ, {"INGEST_BATCH_DOC_COUNT": "2"}), \
          patch("kortext.ingest.SimpleDirectoryReader", return_value=mock_reader), \
          patch("kortext.ingest.AsyncQdrantClient", return_value=mock_client), \
-         patch("kortext.ingest.QdrantClient"), \
          patch("kortext.ingest.IngestCache", return_value=mock_cache), \
          patch("kortext.ingest.ChunkEmbeddingCache", return_value=mock_chunk_cache), \
          patch("kortext.symbols.SymbolGraphManager", return_value=mock_symbol_graph), \
@@ -873,7 +869,6 @@ async def test_index_workspace_forwards_ast_metadata_to_parser(tmp_path):
 
     with patch("kortext.ingest.SimpleDirectoryReader", return_value=mock_reader), \
          patch("kortext.ingest.AsyncQdrantClient", return_value=mock_client), \
-         patch("kortext.ingest.QdrantClient"), \
          patch("kortext.ingest.IngestCache", return_value=mock_cache), \
          patch("kortext.ingest.ChunkEmbeddingCache", return_value=mock_chunk_cache), \
          patch("kortext.symbols.SymbolGraphManager", return_value=mock_symbol_graph), \

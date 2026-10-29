@@ -12,6 +12,8 @@ Verifies every single finding across:
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import json
 import os
 from pathlib import Path
@@ -153,10 +155,12 @@ def test_audit2_dashboard_observability_routes_and_dom_safety(tmp_path, monkeypa
     monkeypatch.delenv("QDRANT_URL", raising=False)
     monkeypatch.delenv("EMBED_DIMENSION", raising=False)
     monkeypatch.setenv("EMBED_BASE_URL", "")
-    r_col = client.post("/api/collections", json={"name": "local_fastembed_col"})
+    with patch("kortext.dashboard.routes.actions._is_sole_custodian_running", return_value=False), patch(
+        "kortext.retrieval.qdrant_engine.EmbeddedQdrantEngine.ensure_collection"
+    ) as ensure:
+        r_col = client.post("/api/collections", json={"name": "local_fastembed_col"})
     assert r_col.status_code == 200
-    meta_after = json.loads(meta_file.read_text(encoding="utf-8"))
-    assert meta_after["collections"]["local_fastembed_col"]["vectors"]["text-dense"]["size"] == 384
+    ensure.assert_any_call("local_fastembed_col", embed_dim=384)
 
     # 4. Verify index.html & JS modules have zero Shift-JIS mojibake and use data-* attributes
     idx_html = (KORTEXT_ROOT / "kortext" / "dashboard" / "templates" / "index.html").read_text(encoding="utf-8")

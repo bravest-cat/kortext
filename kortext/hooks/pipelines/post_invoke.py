@@ -88,17 +88,6 @@ class TokenUsageTracker:
         self.telemetry_dir = telemetry_dir or (get_kortext_home() / "telemetry")
         self.compaction_threshold_pct = compaction_threshold_pct
 
-    def _read_hud_used_pct(self, context: HookContext, steps: Sequence[Any] = ()) -> float:
-        from kortext.hooks.transcript_tokens import resolve_session_token_state
-
-        st = resolve_session_token_state(
-            steps=steps,
-            raw_payload=context.raw_payload,
-            transcript_path=context.transcript_path,
-            model_name=context.model_name,
-        )
-        return st.used_percentage
-
     def _persist_session_checkpoint(
         self,
         context: HookContext,

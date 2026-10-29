@@ -7,7 +7,6 @@ available) and abstains when nothing clears the threshold.
 """
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
@@ -20,7 +19,7 @@ import numpy as np
 import redis
 
 from kortext.falkordb_client import FalkorDBClient, FALKORDB_HOST, FALKORDB_PORT, FALKORDB_PASS
-from kortext.trust.sanitizer import CausalSanitizer, SecurityViolation
+from kortext.trust.sanitizer import CausalSanitizer, fence_memory_by_provenance
 
 logger = logging.getLogger(__name__)
 
@@ -808,7 +807,7 @@ class AgentNativeEpisodicDriver:
             + "AND ANY(tok IN $tokens WHERE toLower(coalesce(r.fact, '')) CONTAINS tok "
             "OR toLower(s.name) CONTAINS tok OR toLower(t.name) CONTAINS tok) "
             "RETURN r.id, coalesce(r.fact, s.name + ' ' + r.relation + ' ' + t.name), s.name, t.name, "
-            "coalesce(r.valid_from, r.created_at, ''), r.emb, r.relation "
+            "coalesce(r.valid_from, r.created_at, ''), r.emb, r.relation, coalesce(r.trust_level, 'tool_confirmed') "
             "ORDER BY coalesce(r.valid_from, r.created_at, '') DESC LIMIT $lim",
             params,
         )
@@ -816,7 +815,7 @@ class AgentNativeEpisodicDriver:
             "MATCH (e:Episodic) WHERE coalesce(e.superseded, false) = false "
             + ("AND coalesce(e.project, 'kortext') = $project " if filter_project else "")
             + "AND ANY(tok IN $tokens WHERE toLower(e.name + ' ' + coalesce(e.content, '')) CONTAINS tok) "
-            "RETURN e.name, e.content, coalesce(e.created_at, ''), e.emb "
+            "RETURN e.name, e.content, coalesce(e.created_at, ''), e.emb, coalesce(e.trust_level, 'speculative') "
             "ORDER BY coalesce(e.created_at, '') DESC LIMIT $lim",
             params,
         )
@@ -825,13 +824,15 @@ class AgentNativeEpisodicDriver:
         cands: List[Tuple[str, str, str, str, List[str], str, Any]] = []
         slots: List[Optional[Tuple[str, str]]] = []
         for row in (fact_rows[1] if fact_rows and len(fact_rows) > 1 else []) or []:
-            fid, fact, sub, obj, ts, emb, rel = (list(row) + [None] * 7)[:7]
-            cands.append(("fact", str(fid or ""), str(fact), str(fact), [str(sub or "")], str(ts or ""), emb))
+            fid, fact, sub, obj, ts, emb, rel, trust = (list(row) + [None] * 8)[:8]
+            shown = fence_memory_by_provenance(str(fact), trust_level=str(trust or "speculative"))
+            cands.append(("fact", str(fid or ""), shown, str(fact), [str(sub or "")], str(ts or ""), emb))
             slots.append((str(sub or "").lower(), str(rel or "").lower()))
         for row in (ep_rows[1] if ep_rows and len(ep_rows) > 1 else []) or []:
-            name, content, ts, emb = (list(row) + [None] * 4)[:4]
+            name, content, ts, emb, trust = (list(row) + [None] * 5)[:5]
             text = f"{name}: {content or ''}"
-            cands.append(("episode", str(name), f"[{name}]: {str(content or '')[:200]}", text, [], str(ts or ""), emb))
+            shown = fence_memory_by_provenance(f"[{name}]: {str(content or '')[:200]}", trust_level=str(trust or "speculative"))
+            cands.append(("episode", str(name), shown, text, [], str(ts or ""), emb))
             slots.append(None)
         if not cands:
             return []

@@ -27,7 +27,6 @@ from kortext.retrieval.query_parser import (
     is_ci_mode,
     is_file_in_workspace,
     resolve_symbol_graph_for_collection,
-    resolve_workspace_root_for_collection,
 )
 from kortext.symbols.seek import extract_symbol_candidates
 

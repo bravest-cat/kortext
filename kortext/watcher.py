@@ -14,24 +14,20 @@ import json
 import logging
 import os
 import signal
-import sys
 import threading
 import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
-import warnings
 
-import httpx
 from dotenv import load_dotenv
-from qdrant_client import AsyncQdrantClient
 from qdrant_client import models as qmodels
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from kortext.cache import ChunkEmbeddingCache, IngestCache
 from kortext.chunking.ast_splitter import ASTCodeSplitter, LANG_MAP
-from kortext.ingest import DEFAULT_EXCLUDE, SUPPORTED_EXT, Document, index_single_file
+from kortext.ingest import DEFAULT_EXCLUDE, SUPPORTED_EXT, index_single_file
 from kortext.symbols import SymbolGraphManager
 
 load_dotenv()

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import html
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 
 from kortext.dashboard.views.specs import (

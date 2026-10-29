@@ -46,8 +46,8 @@
       </div>
       
       <!-- Quick Status Pills -->
-      <div id="quick-status" class="hidden md:flex items-center space-x-2 text-xs font-mono">
-        <span class="text-slate-400">Services:</span>
+      <div id="quick-status" class="hidden lg:flex items-center gap-2 text-xs font-mono whitespace-nowrap">
+        <span class="text-slate-400 hidden xl:inline">Services:</span>
         <span id="pill-qdrant" class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">Qdrant ...</span>
         <span id="pill-falkordb" class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">FalkorDB ...</span>
         <span id="pill-inference" class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">Inference ...</span>
@@ -265,7 +265,11 @@
               </div>
               <div class="flex justify-between text-slate-300">
                 <span class="text-slate-400">Active Invariants:</span>
-                <span class="text-indigo-400" id="hud-invariants">14 Verified</span>
+                <span class="text-indigo-400" id="hud-invariants">--</span>
+              </div>
+              <div class="flex justify-between text-slate-300">
+                <span class="text-slate-400">Re-index Queue:</span>
+                <span class="text-slate-200" id="hud-reindex">--</span>
               </div>
               <div class="flex justify-between text-slate-300">
                 <span class="text-slate-400">Context Budget:</span>

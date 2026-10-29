@@ -4,11 +4,10 @@ Relational Cypher query handlers, cluster inference, and overview graph view bui
 from __future__ import annotations
 
 import html
-from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from pathlib import PurePosixPath
+from typing import Any, Dict, List, Optional, Tuple
 
 from kortext.dashboard.views.specs import (
-    DEFAULT_REL_SPEC,
     REL_SPECS,
     _make_vis_edge,
     _make_vis_node,

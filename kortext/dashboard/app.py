@@ -39,18 +39,41 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
-def _is_trusted_origin(header_val: str) -> bool:
-    """Verifies that an Origin or Referer URL belongs to a strict local loopback host."""
+def _is_trusted_origin(header_val: str, own_host: str = "") -> bool:
+    """Verifies that an Origin or Referer URL is a loopback host or the dashboard's own host."""
     try:
-        parsed = urlparse(header_val)
-        host = (parsed.hostname or "").lower()
-        return host in ALLOWED_LOCAL_HOSTS
-    except Exception:
+        host = (urlparse(header_val).hostname or "").lower()
+        return host in ALLOWED_LOCAL_HOSTS or (bool(own_host) and host == own_host)
+    except ValueError:
         return False
+
+
+def _needs_token(request: Request) -> bool:
+    """Off loopback, every request from another machine must prove it has the kortext token."""
+    client = (request.client.host if request.client else "") or ""
+    return DASHBOARD_HOST not in ALLOWED_LOCAL_HOSTS and client not in ALLOWED_LOCAL_HOSTS
 
 
 @app.middleware("http")
 async def security_and_cache_middleware(request: Request, call_next):
+    if _needs_token(request):
+        import secrets
+
+        from kortext.daemon import token
+
+        expected = token()
+        supplied = (
+            request.query_params.get("token")
+            or request.cookies.get("kortext_token")
+            or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+        )
+        if not secrets.compare_digest(supplied or "", expected):
+            return JSONResponse(status_code=401, content={"status": "error", "message": "token required: open /?token=<~/.kortext/run/daemon.token>"})
+        if request.query_params.get("token"):
+            response = await call_next(request)
+            response.set_cookie("kortext_token", expected, httponly=True, samesite="strict")
+            return response
+
     # CSRF / Cross-Origin protection on mutating endpoints
     if request.method in ("POST", "PUT", "DELETE", "PATCH"):
         origin = request.headers.get("origin")
@@ -59,12 +82,13 @@ async def security_and_cache_middleware(request: Request, call_next):
         req_host = (request.url.hostname or "").lower()
         enforce_csrf = request.headers.get("x-kortext-enforce-csrf") == "1" or req_host != "testserver"
 
-        if origin and not _is_trusted_origin(origin):
+        own_host = (request.url.hostname or "").lower()
+        if origin and not _is_trusted_origin(origin, own_host):
             return JSONResponse(
                 status_code=403,
                 content={"status": "error", "message": f"CSRF blocked: untrusted Origin '{origin}'"},
             )
-        if referer and not _is_trusted_origin(referer):
+        if referer and not _is_trusted_origin(referer, own_host):
             return JSONResponse(
                 status_code=403,
                 content={"status": "error", "message": f"CSRF blocked: untrusted Referer '{referer}'"},
@@ -106,6 +130,8 @@ async def index(request: Request):
 
 def main():
     """CLI and daemon entry point (binds to 127.0.0.1 by default for local security)."""
+    if DASHBOARD_HOST not in ALLOWED_LOCAL_HOSTS:
+        print(f"Dashboard bound to {DASHBOARD_HOST}; other machines need /?token=<contents of ~/.kortext/run/daemon.token>")
     uvicorn.run("kortext.dashboard.app:app", host=DASHBOARD_HOST, port=DASHBOARD_PORT, reload=False)
 
 

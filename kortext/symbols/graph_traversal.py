@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from kortext.symbols.formatter import format_impact_report

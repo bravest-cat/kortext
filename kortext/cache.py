@@ -13,7 +13,7 @@ import struct
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from kortext._home import KORTEXT_HOME, get_kortext_home
+from kortext._home import get_kortext_home
 
 DEFAULT_CACHE_DIR = get_kortext_home()
 DEFAULT_CACHE_FILE = DEFAULT_CACHE_DIR / "index_cache.db"
@@ -328,20 +328,6 @@ class ChunkEmbeddingCache:
     def compute_chunk_sha(text: str) -> str:
         """Computes SHA-256 hex digest of raw chunk text preserving significant leading indentation."""
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-    def get_embedding(self, text: str, model_name: str) -> Optional[List[float]]:
-        """Look up embedding for a single text."""
-        sha = self.compute_chunk_sha(text)
-        with self._get_connection() as conn:
-            row = conn.execute(
-                "SELECT embedding, dim FROM chunk_embedding_cache WHERE chunk_sha256 = ? AND model_name = ?",
-                (sha, model_name),
-            ).fetchone()
-            if not row:
-                return None
-            blob = row["embedding"]
-            dim = row["dim"]
-            return list(struct.unpack(f"{dim}f", blob))
 
     def get_batch(
         self, texts: List[str], model_name: str

@@ -17,7 +17,6 @@ import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-import redis
 
 from kortext.falkordb_client import (
     FalkorDBClient,
@@ -26,7 +25,6 @@ from kortext.falkordb_client import (
     FALKORDB_PASS,
     get_shared_falkordb_client,
 )
-from kortext.symbols.formatter import format_impact_report
 
 logger = logging.getLogger("kortext.symbols.graph")
 

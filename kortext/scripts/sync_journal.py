@@ -9,7 +9,6 @@ import re
 from pathlib import Path
 from typing import List, Set, Tuple
 
-from dotenv import load_dotenv
 
 from kortext.episodic import AgentNativeEpisodicDriver
 from kortext.falkordb_client import get_shared_falkordb_client

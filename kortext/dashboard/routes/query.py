@@ -4,7 +4,7 @@ Retrieval sandbox, graph visualizer queries, and symbol impact/lookup routes.
 
 import asyncio
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -235,7 +235,6 @@ async def run_query(request: Request):
         return JSONResponse(status_code=400, content={"error": "query cannot be empty"})
 
     try:
-        engine = await get_retrieval_engine()
         fed_kwargs: Dict[str, Any] = {
             "query": query_text,
             "collection": col,
@@ -244,7 +243,17 @@ async def run_query(request: Request):
         if project and str(project).strip().lower() != "all":
             fed_kwargs["project"] = str(project).strip()
 
-        result = await engine.federated_query(**fed_kwargs)
+        from kortext import daemon
+
+        if is_qdrant_embedded_mode(probe_local=True) and _is_sole_custodian_running() and daemon.is_up():
+            # The daemon owns the vectors; asking it gives dense and BM25 results this process cannot read.
+            import json
+
+            res = await daemon.call_tool("search_knowledge_and_memory", {k: v for k, v in fed_kwargs.items() if v is not None})
+            result = json.loads(res.content[0].text)
+        else:
+            engine = await get_retrieval_engine()
+            result = await engine.federated_query(**fed_kwargs)
         raw_symbolic = result.get("symbolic_context", [])
         symbols = result.get("symbols")
         if not isinstance(symbols, list):

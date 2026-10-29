@@ -32,7 +32,7 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-from kortext._home import KORTEXT_HOME, get_kortext_home
+from kortext._home import get_kortext_home
 
 _CYPHER_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

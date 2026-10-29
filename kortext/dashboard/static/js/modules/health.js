@@ -152,8 +152,15 @@ export async function loadTelemetry() {
       const invEl = document.getElementById('hud-invariants');
       if (rssEl) rssEl.innerText = `${t.substrate_ram_rss_mb} MB RSS`;
       if (latEl) latEl.innerText = `${t.falkordb_latency_ms} ms`;
-      if (invEl && t.active_invariants !== undefined) {
+      if (invEl && t.active_invariants != null) {
         invEl.innerText = `${t.active_invariants} Verified`;
+      }
+      const rxEl = document.getElementById('hud-reindex');
+      if (rxEl && t.reindex) {
+        const rx = t.reindex;
+        rxEl.innerText = `${rx.pending} pending, ${rx.failed} failed`;
+        rxEl.className = rx.failed ? 'text-rose-400' : 'text-slate-200';
+        rxEl.title = (rx.recent_failures || []).map(f => `${f.path}: ${f.error}`).join('\n');
       }
       const ctxEl = document.getElementById('hud-context-window');
       if (ctxEl && t.context_window) {

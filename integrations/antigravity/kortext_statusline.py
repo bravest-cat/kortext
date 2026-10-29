@@ -127,8 +127,9 @@ def write_hud_snapshot(
     total_input_tokens: Optional[int] = None,
     context_window_size: Optional[int] = None,
     exceeds_200k_tokens: Optional[bool] = None,
+    session_id: str = "",
 ) -> None:
-    """Atomically updates ~/.kortext/run/hud_state.json."""
+    """Atomically updates ~/.kortext/run/hud_state.json; token figures are also kept per session."""
     try:
         run_dir = kortext_home / "run"
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -156,6 +157,20 @@ def write_hud_snapshot(
         if exceeds_200k_tokens is not None:
             existing["exceeds_200k_tokens"] = bool(exceeds_200k_tokens)
         existing["updated_at"] = time.time()
+        if session_id and (used_percentage is not None or total_input_tokens is not None):
+            now = time.time()
+            sessions = {
+                k: v for k, v in (existing.get("sessions") or {}).items()
+                if isinstance(v, dict) and now - float(v.get("updated_at") or 0) < 86400
+            }
+            sessions[session_id] = {
+                "used_percentage": used_percentage,
+                "total_input_tokens": total_input_tokens,
+                "context_window_size": context_window_size,
+                "exceeds_200k_tokens": bool(exceeds_200k_tokens),
+                "updated_at": now,
+            }
+            existing["sessions"] = sessions
 
         if project_id:
             projects = existing.get("projects")
@@ -203,6 +218,10 @@ def parse_stdin_state(raw_stdin: str) -> Dict[str, Any]:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _session_id_from_state(state: Dict[str, Any]) -> str:
+    return str(state.get("conversationId") or state.get("conversation_id") or state.get("sessionId") or state.get("session_id") or "")
 
 
 def _resolve_project_from_state(state: Dict[str, Any]) -> Optional[str]:
@@ -274,6 +293,7 @@ def format_kortext_badge(compact: bool = False, state: Optional[Dict[str, Any]] 
             kortext_home = host_fallback
     state = state or {}
     proj = _resolve_project_from_state(state)
+    session_id = _session_id_from_state(state)
 
     use_snapshot = (
         (check_falkor, check_qdrant, check_omlx) == _ORIG_PROBES
@@ -329,6 +349,7 @@ def format_kortext_badge(compact: bool = False, state: Optional[Dict[str, Any]] 
                 used_percentage=used_pct_val,
                 total_input_tokens=total_input_tokens,
                 context_window_size=context_window_size,
+                session_id=session_id,
                 exceeds_200k_tokens=exceeds_200k,
             )
     else:
@@ -348,6 +369,7 @@ def format_kortext_badge(compact: bool = False, state: Optional[Dict[str, Any]] 
                 used_percentage=used_pct_val,
                 total_input_tokens=total_input_tokens,
                 context_window_size=context_window_size,
+                session_id=session_id,
                 exceeds_200k_tokens=exceeds_200k,
             )
 
@@ -441,6 +463,7 @@ def main():
             except (ValueError, TypeError):
                 pass
     exceeds_200k = bool(state.get("exceeds_200k_tokens", False))
+    session_id = _session_id_from_state(state)
 
     if sync_tokens_only:
         if used_pct_val is not None or total_input_tokens is not None or exceeds_200k:
@@ -469,6 +492,7 @@ def main():
                 used_percentage=used_pct_val,
                 total_input_tokens=total_input_tokens,
                 context_window_size=context_window_size,
+                session_id=session_id,
                 exceeds_200k_tokens=exceeds_200k,
             )
         return

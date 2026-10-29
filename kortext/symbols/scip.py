@@ -23,7 +23,6 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-import redis
 
 from kortext.symbols import scip_pb2
 from kortext.falkordb_client import (

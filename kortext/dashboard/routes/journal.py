@@ -5,7 +5,7 @@ Journal parsing and file reading route handlers.
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 from fastapi import APIRouter
 

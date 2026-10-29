@@ -6,21 +6,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 import asyncio
-import json
 import os
 import re
 import shutil
-import sqlite3
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Request
 
 router = APIRouter(tags=["actions"])
 
-from kortext._home import get_kortext_home
 
 KORTEXT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -53,66 +50,6 @@ def _is_sole_custodian_running() -> bool:
     from kortext._qdrant import is_embedded_qdrant_locked
 
     return is_embedded_qdrant_locked()
-
-
-async def _check_remote_qdrant(url: str = "http://127.0.0.1:6333") -> bool:
-    """Checks if a remote/local Qdrant HTTP service is reachable."""
-    try:
-        async with httpx.AsyncClient(timeout=1.0) as client:
-            resp = await client.get(f"{url.rstrip('/')}/collections")
-            return resp.status_code == 200
-    except Exception:
-        return False
-
-
-def _get_default_collection_schema(embed_dim: int = 4096) -> Dict[str, Any]:
-    """Generates the embedded Qdrant schema matching QdrantClient create_collection format."""
-    return {
-        "vectors": {
-            "text-dense": {
-                "size": embed_dim,
-                "distance": "Cosine",
-                "hnsw_config": None,
-                "quantization_config": None,
-                "on_disk": True,
-                "memory": None,
-                "datatype": None,
-                "multivector_config": None,
-            }
-        },
-        "shard_number": None,
-        "sharding_method": None,
-        "replication_factor": None,
-        "write_consistency_factor": None,
-        "on_disk_payload": None,
-        "payload": None,
-        "hnsw_config": None,
-        "wal_config": None,
-        "optimizers_config": None,
-        "quantization_config": None,
-        "sparse_vectors": {
-            "text-sparse-new": {
-                "index": {
-                    "full_scan_threshold": None,
-                    "on_disk": True,
-                    "memory": None,
-                    "datatype": None,
-                },
-                "modifier": None,
-            }
-        },
-        "strict_mode_config": None,
-        "metadata": None,
-    }
-
-
-def _init_collection_sqlite(col_dir: Path) -> None:
-    """Initializes Qdrant Local collection storage.sqlite so embedded Qdrant loads cleanly."""
-    col_dir.mkdir(parents=True, exist_ok=True)
-    sql_path = col_dir / "storage.sqlite"
-    with sqlite3.connect(str(sql_path), timeout=5.0) as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS points (id TEXT PRIMARY KEY, point BLOB)")
-        conn.commit()
 
 
 @router.post("/api/collections")
@@ -155,41 +92,16 @@ async def create_collection(request: Request):
                     return {"status": "ok", "message": f"Collection '{name}' created successfully."}
                 return {"status": "error", "message": resp.text}
 
-        # 2. Zero-Docker mode (when Qdrant HTTP is unavailable)
-        # Invariant 3 Mandate: Do NOT instantiate QdrantClient(path=...) in secondary dashboard process
-        # if the store is open or sole custodian daemon is running.
-        kortext_home = get_kortext_home()
-        qpath = kortext_home / "qdrant"
-        meta_file = qpath / "meta.json"
-        custodian_running = _is_sole_custodian_running()
+        # 2. Embedded mode: only the process holding the store may write it. Hand-editing meta.json
+        # under a running daemon corrupts Qdrant's view of its own storage.
+        if _is_sole_custodian_running():
+            return {
+                "status": "error",
+                "message": f"The kortext daemon owns embedded Qdrant. Create '{name}' by indexing into it: "
+                f"index_directory(path=..., collection='{name}').",
+            }
 
-        if meta_file.is_file() or custodian_running:
-            try:
-                qpath.mkdir(parents=True, exist_ok=True)
-                if meta_file.is_file():
-                    try:
-                        meta_data = json.loads(meta_file.read_text(encoding="utf-8"))
-                    except Exception:
-                        meta_data = {"collections": {}, "aliases": {}}
-                else:
-                    meta_data = {"collections": {}, "aliases": {}}
-
-                collections = meta_data.setdefault("collections", {})
-                if name not in collections:
-                    collections[name] = _get_default_collection_schema(embed_dim=embed_dim)
-                    col_dir = qpath / "collection" / name
-                    _init_collection_sqlite(col_dir)
-
-                    # Atomic write to meta.json
-                    tmp_file = meta_file.with_suffix(f".tmp.{os.getpid()}")
-                    tmp_file.write_text(json.dumps(meta_data, indent=2), encoding="utf-8")
-                    tmp_file.replace(meta_file)
-
-                return {"status": "ok", "message": f"Collection '{name}' created successfully in native embedded Qdrant."}
-            except Exception as e:
-                return {"status": "error", "message": f"Failed to safely update meta.json: {e}"}
-
-        # 4. Fallback to EmbeddedQdrantEngine guarded with exception handling (no daemon is holding lock)
+        # 3. No daemon: create it through Qdrant's own API.
         try:
             from kortext.retrieval.qdrant_engine import EmbeddedQdrantEngine
 

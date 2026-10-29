@@ -8,12 +8,11 @@ import json
 import logging
 import os
 import sqlite3
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
 
-from kortext._home import KORTEXT_HOME, get_kortext_home
+from kortext._home import get_kortext_home
 
 logger = logging.getLogger("kortext.retrieval.discovery")
 

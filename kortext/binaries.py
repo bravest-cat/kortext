@@ -226,15 +226,6 @@ def get_falkordb_download_info(
     return None
 
 
-def compute_file_sha256(path: Path) -> str:
-    """Computes the SHA-256 hex digest of a file."""
-    hasher = hashlib.sha256()
-    with open(path, "rb") as f:
-        while chunk := f.read(65536):
-            hasher.update(chunk)
-    return hasher.hexdigest().lower()
-
-
 def _fetch_remote_sha256_sidecar(url: str, timeout: float = 10.0) -> Optional[str]:
     """Attempts to fetch a companion .sha256 sidecar file from the release URL."""
     for suffix in (".sha256", ".sha256sum"):

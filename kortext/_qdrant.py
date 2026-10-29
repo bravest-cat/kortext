@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 from qdrant_client import AsyncQdrantClient, QdrantClient
 
-from kortext._env import get_configured_qdrant_url, get_env, get_qdrant_url, is_qdrant_embedded_mode
+from kortext._env import get_env, get_qdrant_url, is_qdrant_embedded_mode
 from kortext._home import get_kortext_home
 
 logger = logging.getLogger("kortext.qdrant")

@@ -14,7 +14,6 @@ monitors NEVER instantiate QdrantClient(path=...) directly.
 """
 
 from __future__ import annotations
-import types
 
 import asyncio
 from datetime import datetime
@@ -30,7 +29,7 @@ from kortext._env import (
     get_embed_base_url,
     is_qdrant_embedded_mode,
 )
-from kortext._home import KORTEXT_HOME, get_kortext_home
+from kortext._home import get_kortext_home
 from kortext.falkordb_client import get_shared_falkordb_client
 from kortext.retrieval.discovery import discover_vector_collections
 

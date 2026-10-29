@@ -6,7 +6,7 @@ generation from underlying graph storage engines.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 __all__ = [
     "format_impact_report",

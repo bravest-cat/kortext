@@ -21,7 +21,7 @@ Instead of brute-force text scans, Kortext provides **compiler-grade AST B-Tree 
 
 ## 2. Supported Languages & Multi-Language Tree-sitter Support
 
-Kortext supports 10+ major programming languages out of the box using official Tree-sitter grammars:
+Kortext parses 11 languages with official Tree-sitter grammars. Python, TypeScript, JavaScript, Rust and Go ship with the base install:
 
 | Language | Extensions | Grammar Package | Extracted Constructs |
 |:---|:---|:---|:---|
@@ -34,6 +34,9 @@ Kortext supports 10+ major programming languages out of the box using official T
 | **Java** | `.java` | `tree-sitter-java` | Classes, Interfaces, Records, Methods, Enums |
 | **Kotlin** | `.kt` | `tree-sitter-kotlin` | Functions, Classes, Interfaces, Data Classes |
 | **Swift** | `.swift` | `tree-sitter-swift` | Functions, Structs, Classes, Protocols, Extensions |
+| **C#** | `.cs` | `tree-sitter-c-sharp` | Classes, Interfaces, Structs, Methods, Enums |
+
+C, C++, Java, Kotlin, Swift and C# need the `tier2-languages` extra (`uv sync --extra tier2-languages`).
 
 ---
 
@@ -78,17 +81,26 @@ result = await seek_symbol(symbol_name="RetrievalEngine")
 ### JSON Response Schema
 ```json
 {
-  "symbol": "RetrievalEngine",
-  "kind": "class",
-  "file_path": "/path/to/project/kortext/retrieval/engine.py",
-  "start_line": 42,
-  "end_line": 218,
-  "signature": "class RetrievalEngine(DenseEmbedderProtocol)",
-  "docstring": "Federated multi-tier retrieval orchestrator supporting RRF.",
-  "immediate_callers": ["federated_query", "search_knowledge_and_memory"],
-  "immediate_callees": ["_fetch_tier0", "_fetch_tier1", "_fetch_tier2"]
+  "status": "found",
+  "matches": [
+    {
+      "symbol": "RetrievalEngine",
+      "kind": "class",
+      "file": "/path/to/project/kortext/retrieval/engine.py",
+      "lines": [124, 610],
+      "signature": "class RetrievalEngine:",
+      "docstring": "Hybrid RRF retrieval over Qdrant (dense, BM25) and FalkorDB (symbols, episodic facts).",
+      "callers": [{"caller": "federated_query", "file": "kortext/retrieval/engine.py", "line": 640}],
+      "callees": [{"callee": "rank_candidates_rrf", "file": "kortext/retrieval/fusion.py"}],
+      "detail_level": "skeleton",
+      "code": "class RetrievalEngine:\n    ..."
+    }
+  ],
+  "detail_level": "skeleton"
 }
 ```
+
+A miss returns `{"status": "not_found", "query": "...", "detail_level": "..."}`. `detail_level="interface"` adds `methods`; `"full"` adds `declaration`.
 
 ---
 

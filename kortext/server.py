@@ -52,8 +52,6 @@ from kortext.retrieval import (
     resolve_workspace_root_for_collection,
 )
 from kortext.server_helpers import (
-    FORBIDDEN_SYSTEM_PREFIXES,
-    SENSITIVE_DIR_NAMES,
     _filter_untrusted_injection_chunks,
     _format_federated_markdown,
     _validate_index_path,
