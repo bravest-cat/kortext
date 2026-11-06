@@ -33,7 +33,6 @@ os.environ["KORTEXT_HOME"] = str(_TEST_KORTEXT_HOME)
 atexit.register(shutil.rmtree, _TEST_HOME, ignore_errors=True)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-_BENCHMARK_STASH_KEY = pytest.StashKey[Dict[str, Any]]()
 _SANDBOX_GRAPHS: Dict[str, Dict[str, Any]] = {}
 
 
@@ -1590,45 +1589,7 @@ def _sandbox_falkordb_guard():
     _install_seatbelt_falkordb_patch()
 
 
-@pytest.fixture(scope="session")
-def benchmark_store(request) -> Dict[str, Any]:
-    """Shared dict for collecting real measured benchmark metrics across tests."""
-    store: Dict[str, Any] = {
-        "token_reduction": {},
-        "memory_retention": {},
-        "standard": {},
-        "run_timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    request.session.stash[_BENCHMARK_STASH_KEY] = store
-    return store
-
-
 def pytest_sessionfinish(session, exitstatus):
-    """Write benchmark reports after the session completes ONLY when benchmark tests actually ran."""
-    store = None
-    try:
-        store = session.stash.get(_BENCHMARK_STASH_KEY, None)
-    except Exception:
-        store = None
-
-    if isinstance(store, dict) and (store.get("token_reduction") or store.get("memory_retention")):
-        DATA_DIR.mkdir(exist_ok=True)
-        internal_report = {
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "note": "Populated dynamically from session benchmark_store when benchmark tests run.",
-            "token_reduction": store.get("token_reduction", {}),
-            "memory_retention": store.get("memory_retention", {}),
-        }
-        (DATA_DIR / "benchmark_results.json").write_text(json.dumps(internal_report, indent=2))
-
-    if isinstance(store, dict) and store.get("standard"):
-        DATA_DIR.mkdir(exist_ok=True)
-        standard_report = {
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            **store["standard"],
-        }
-        (DATA_DIR / "standard_benchmark_results.json").write_text(json.dumps(standard_report, indent=2))
-
     if not _SEATBELT_BLOCKED:
         try:
             from kortext.falkordb_client import get_shared_falkordb_client

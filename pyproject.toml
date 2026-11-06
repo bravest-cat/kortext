@@ -57,6 +57,9 @@ tier2-languages = [
   "tree-sitter-swift>=0.7.0",
   "tree-sitter-c-sharp>=0.23.0",
 ]
+bench = [
+  "tiktoken>=0.7.0",
+]
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",

@@ -214,6 +214,9 @@ _BASE_EXCLUDES = [
     "journal/dreams",
     "journal/reports",
     "*-dream.md",
+    "data",
+    "data/*",
+    "kortext/benchmarks/questions.json",
     *sorted(SENSITIVE_DIR_NAMES),
 ]
 _ENV_EXCLUDES = [

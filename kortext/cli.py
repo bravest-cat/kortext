@@ -295,6 +295,16 @@ def cmd_watch(args):
         asyncio.run(start_watcher(watch_root=root, collection=coll))
 
 
+def cmd_benchmark(args):
+    """Run AST and vector benchmark suite against FalkorDB."""
+    from kortext.benchmarks.runner import run_benchmark
+    run_benchmark(
+        root=getattr(args, "root", None),
+        k=getattr(args, "k", 3),
+        out_path=getattr(args, "out", None),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="kortext",
@@ -439,6 +449,13 @@ def main():
     p_mem_index = p_mem_subs.add_parser("index", help="Regenerate INDEX.md in memory vault")
     p_mem_index.add_argument("--root", default=None, help="Root path of memory vault / journals")
     p_mem_index.set_defaults(func=cmd_memory_index)
+
+    # benchmark
+    p_bench = subparsers.add_parser("benchmark", help="Run AST and vector benchmark suite against FalkorDB")
+    p_bench.add_argument("--root", default=None, help="Root directory path to index and benchmark (default: repo root)")
+    p_bench.add_argument("--k", type=int, default=3, help="Number of repetitions per task for pass@k / pass^k (default: 3)")
+    p_bench.add_argument("--out", default=None, help="Output path for benchmark results JSON (default: data/benchmark_results.json)")
+    p_bench.set_defaults(func=cmd_benchmark)
 
     # help
     p_help = subparsers.add_parser("help", help="Show this help message")
