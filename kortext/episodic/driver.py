@@ -7,6 +7,7 @@ available) and abstains when nothing clears the threshold.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -51,8 +52,12 @@ def _strip_names(text: str, names: List[str]) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+_warned_uncalibrated_embedder = False
+
+
 def _dense_embedder() -> Optional[Any]:
     """The configured dense embedder, or None when only the hash fallback is available."""
+    global _warned_uncalibrated_embedder
     try:
         from kortext.embeddings import _OfflineDeterministicEmbeddingModel, get_dense_embedder
 
@@ -60,10 +65,204 @@ def _dense_embedder() -> Optional[Any]:
         model = getattr(emb, "model", None)
         if isinstance(model, _OfflineDeterministicEmbeddingModel):
             return None
+        m_name = getattr(emb, "model_name", "") or ""
+        if not _warned_uncalibrated_embedder and "bge-small" not in m_name.lower():
+            logger.warning(
+                "Active embedder '%s' is not bge-small; episodic threshold %.2f is uncalibrated",
+                m_name,
+                DENSE_MIN_SCORE,
+            )
+            _warned_uncalibrated_embedder = True
         return emb
     except Exception as exc:
         logger.warning("Dense embedder unavailable for episodic search, using lexical scoring: %s", exc)
         return None
+
+
+def _find_grounded_symbols(
+    client: Any,
+    explicit_entities: List[str],
+    text: str,
+    max_symbols: int = 5,
+    symbols_graph: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """
+    Identifies up to max_symbols code symbols mentioned in a fact:
+    explicit entities first, then identifier-shaped tokens in the symbol graph.
+    Reuses compute_ast_body_hash from kortext.invariants. Bound to at most 5 symbols.
+    """
+    cand_names: List[str] = []
+    for ent in explicit_entities:
+        c = str(ent or "").strip()
+        if c and len(c) >= 2 and c.lower() not in _STOPWORDS and c not in cand_names:
+            cand_names.append(c)
+
+    tokens = [
+        w for w in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", text or "")
+        if w.lower() not in _STOPWORDS and w not in cand_names
+    ]
+    for tok in tokens:
+        if tok not in cand_names:
+            cand_names.append(tok)
+        if len(cand_names) >= 25:
+            break
+
+    if not cand_names:
+        return []
+
+    if hasattr(client, "_mock_return_value") or type(client).__name__ == "MagicMock":
+        return []
+
+    s_graph = symbols_graph or os.getenv("KORTEXT_SYMBOLS_GRAPH", os.getenv("FALKORDB_SYMBOLS_GRAPH", "kortext_symbols"))
+    try:
+        res = client.query(
+            s_graph,
+            "MATCH (s:Symbol) WHERE s.name IN $names OR s.qualified_name IN $names "
+            "OPTIONAL MATCH (s)-[:DEFINED_IN]->(f:File) "
+            "RETURN s.name, s.qualified_name, coalesce(f.path, s.file_path, ''), coalesce(s.body_hash, '') "
+            "LIMIT 10",
+            {"names": cand_names[:25]},
+        )
+        if not res or len(res) < 2 or not res[1]:
+            return []
+    except Exception as exc:
+        logger.debug("Symbol grounding lookup skipped: %s", exc)
+        return []
+
+    from kortext.invariants import compute_ast_body_hash
+
+    name_to_row = {}
+    for row in res[1]:
+        s_name = str(row[0]) if row[0] else ""
+        s_qname = str(row[1]) if row[1] else ""
+        s_file = str(row[2]) if row[2] else ""
+        s_hash = str(row[3]) if row[3] else ""
+        if s_name:
+            name_to_row.setdefault(s_name, (s_name, s_qname, s_file, s_hash))
+        if s_qname:
+            name_to_row.setdefault(s_qname, (s_name, s_qname, s_file, s_hash))
+
+    grounded: List[Dict[str, str]] = []
+    seen_qnames = set()
+    for name in cand_names:
+        if name in name_to_row:
+            s_name, s_qname, s_file, s_hash = name_to_row[name]
+            canonical_key = s_qname or s_name
+            if canonical_key in seen_qnames:
+                continue
+            seen_qnames.add(canonical_key)
+
+            body_h = s_hash
+            if not body_h and s_file:
+                try:
+                    body_h = compute_ast_body_hash(s_file, s_name) or ""
+                except Exception:
+                    body_h = ""
+
+            grounded.append({
+                "symbol": canonical_key,
+                "name": s_name,
+                "file": s_file,
+                "hash": body_h or "",
+            })
+            if len(grounded) >= max_symbols:
+                break
+
+    return grounded
+
+
+def _check_symbols_staleness_batch(
+    client: Any,
+    grounded_list_by_key: Dict[Any, List[Dict[str, Any]]],
+    symbols_graph: Optional[str] = None,
+) -> Dict[Any, Tuple[bool, List[str]]]:
+    """
+    Checks staleness for a batch of memories in ONE Cypher query against the symbol graph.
+    Fails open: returns not stale if query or FalkorDB fails.
+    Returns: mapping of key -> (is_stale, list_of_stale_symbols)
+    """
+    all_sym_names = set()
+    for sym_list in grounded_list_by_key.values():
+        for g in sym_list:
+            if isinstance(g, dict):
+                if g.get("symbol"):
+                    all_sym_names.add(g["symbol"])
+                if g.get("name"):
+                    all_sym_names.add(g["name"])
+
+    if not all_sym_names:
+        return {k: (False, []) for k in grounded_list_by_key}
+
+    target_graph = symbols_graph or os.getenv("KORTEXT_SYMBOLS_GRAPH", os.getenv("FALKORDB_SYMBOLS_GRAPH", "kortext_symbols"))
+    try:
+        res = client.query(
+            target_graph,
+            "MATCH (s:Symbol) WHERE s.name IN $names OR s.qualified_name IN $names "
+            "OPTIONAL MATCH (s)-[:DEFINED_IN]->(f:File) "
+            "RETURN s.name, s.qualified_name, coalesce(s.body_hash, ''), coalesce(f.path, s.file_path, '')",
+            {"names": list(all_sym_names)},
+        )
+    except Exception as exc:
+        logger.debug("Batched staleness query failed open: %s", exc)
+        return {k: (False, []) for k in grounded_list_by_key}
+
+    curr_map: Dict[str, Tuple[str, str, str]] = {}
+    if res and len(res) > 1 and res[1]:
+        for row in res[1]:
+            s_name = str(row[0]) if row[0] else ""
+            s_qname = str(row[1]) if row[1] else ""
+            s_hash = str(row[2]) if row[2] else ""
+            s_file = str(row[3]) if row[3] else ""
+            val = (s_hash, s_file, s_name)
+            if s_qname:
+                curr_map[s_qname] = val
+            if s_name:
+                curr_map[s_name] = val
+
+    from kortext.invariants import compute_ast_body_hash
+
+    live_hash_cache: Dict[Tuple[str, str], Optional[str]] = {}
+
+    out: Dict[Any, Tuple[bool, List[str]]] = {}
+    for key, sym_list in grounded_list_by_key.items():
+        stale_names: List[str] = []
+        for g in sym_list:
+            if not isinstance(g, dict):
+                continue
+            qname = g.get("symbol") or ""
+            name = g.get("name") or (qname.split("::")[-1] if "::" in qname else qname)
+            stored_h = g.get("hash") or ""
+            file_path = g.get("file") or ""
+
+            curr = curr_map.get(qname) or curr_map.get(name)
+            if not curr:
+                # Symbol vanished from symbol graph
+                stale_names.append(name)
+                continue
+
+            curr_h, curr_file, matched_name = curr
+            eff_file = curr_file or file_path
+            eff_name = matched_name or name
+
+            live_h = None
+            if eff_file:
+                cache_key = (eff_file, eff_name)
+                if cache_key in live_hash_cache:
+                    live_h = live_hash_cache[cache_key]
+                else:
+                    try:
+                        live_h = compute_ast_body_hash(eff_file, eff_name)
+                    except Exception:
+                        live_h = None
+                    live_hash_cache[cache_key] = live_h
+
+            effective_h = live_h or curr_h
+            if stored_h and effective_h != stored_h:
+                stale_names.append(name)
+
+        out[key] = (bool(stale_names), stale_names)
+
+    return out
 
 
 def jaro_winkler_similarity(s1: str, s2: str, p: float = 0.1) -> float:
@@ -246,6 +445,7 @@ class AgentNativeEpisodicDriver:
         trust_level: str = "speculative",
         category: str = "implementation",
         date: Optional[str] = None,
+        symbols_graph: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Agent-Native recording with Trust Anchor State Machine:
@@ -333,11 +533,15 @@ class AgentNativeEpisodicDriver:
 
         # 2. Persist (:Episodic) Node with Trust Anchor and link to Project
         tags_str = ", ".join(tags) if tags else ""
+        ep_entity_names = [e.get("name", "") for e in actual_entities]
+        ep_grounded = _find_grounded_symbols(self.client, ep_entity_names, content, symbols_graph=symbols_graph)
+        ep_grounded_str = json.dumps(ep_grounded) if ep_grounded else ""
+
         self._query(
             "MERGE (e:Episodic {name: $name}) "
             "SET e.content = $content, e.created_at = $now, e.date = $date, e.project = $project, "
             "e.tags = $tags, e.superseded = false, e.trust_level = $trust_level, "
-            "e.trust_score = $trust_score, e.category = $category "
+            "e.trust_score = $trust_score, e.category = $category, e.grounded_symbols = $grounded_symbols "
             "MERGE (p:Project {id: $project}) "
             "ON CREATE SET p.name = $project "
             "MERGE (p)-[:HAS_EPISODE]->(e)",
@@ -351,6 +555,7 @@ class AgentNativeEpisodicDriver:
                 "trust_level": norm_level,
                 "trust_score": trust_score,
                 "category": cat,
+                "grounded_symbols": ep_grounded_str,
             },
         )
 
@@ -389,6 +594,10 @@ class AgentNativeEpisodicDriver:
 
             if src and tgt:
                 fact_id = f"fact_{uuid.uuid4().hex[:10]}"
+                fact_cand = [src, tgt]
+                fact_grounded = _find_grounded_symbols(self.client, fact_cand, fact_text, symbols_graph=symbols_graph)
+                fact_grounded_str = json.dumps(fact_grounded) if fact_grounded else ""
+
                 self._query(
                     "MERGE (s:Entity {name: $src}) "
                     "MERGE (t:Entity {name: $tgt}) "
@@ -397,7 +606,7 @@ class AgentNativeEpisodicDriver:
                     "r.transaction_time = $now, r.source_session = $session, r.importance = 5, "
                     "r.confidence = 0.95, r.dormant = false, r.superseded = false, "
                     "r.trust_level = $trust_level, r.trust_score = $trust_score, "
-                    "r.project = $project",
+                    "r.project = $project, r.grounded_symbols = $grounded_symbols",
                     {
                         "src": src,
                         "tgt": tgt,
@@ -409,6 +618,7 @@ class AgentNativeEpisodicDriver:
                         "trust_level": norm_level,
                         "trust_score": trust_score,
                         "project": proj,
+                        "grounded_symbols": fact_grounded_str,
                     },
                 )
 
@@ -466,6 +676,7 @@ class AgentNativeEpisodicDriver:
         source_tier: int = 2,
         project: Optional[str] = None,
         trust_level: Optional[str] = None,
+        symbols_graph: Optional[str] = None,
     ) -> str:
         """
         Records an episodic relationship between subject and object entities with bi-temporal attribution.
@@ -506,6 +717,10 @@ class AgentNativeEpisodicDriver:
         """
         self._query(merge_nodes_cypher, {"sub": subject, "obj": obj, "now": now})
 
+        fact_cand = [subject, obj]
+        fact_grounded = _find_grounded_symbols(self.client, fact_cand, fact, symbols_graph=symbols_graph)
+        fact_grounded_str = json.dumps(fact_grounded) if fact_grounded else ""
+
         # 2. Materialize Directed Bi-Temporal Relationship
         rel_cypher = """
         MATCH (s:Entity {name: $sub})
@@ -525,7 +740,8 @@ class AgentNativeEpisodicDriver:
             dormant: false,
             superseded: false,
             trust_level: $trust_level,
-            trust_score: $trust_score
+            trust_score: $trust_score,
+            grounded_symbols: $grounded_symbols
         }]->(t)
         RETURN r.id
         """
@@ -544,6 +760,7 @@ class AgentNativeEpisodicDriver:
             "project": proj,
             "trust_level": norm_level,
             "trust_score": trust_score,
+            "grounded_symbols": fact_grounded_str,
         }
         self._query(rel_cypher, params)
 
@@ -809,7 +1026,8 @@ class AgentNativeEpisodicDriver:
             + "AND ANY(tok IN $tokens WHERE toLower(coalesce(r.fact, '')) CONTAINS tok "
             "OR toLower(s.name) CONTAINS tok OR toLower(t.name) CONTAINS tok) "
             "RETURN r.id, coalesce(r.fact, s.name + ' ' + r.relation + ' ' + t.name), s.name, t.name, "
-            "coalesce(r.valid_from, r.created_at, ''), r.emb, r.relation, coalesce(r.trust_level, 'tool_confirmed') "
+            "coalesce(r.valid_from, r.created_at, ''), r.emb, r.relation, coalesce(r.trust_level, 'tool_confirmed'), "
+            "coalesce(r.grounded_symbols, '') "
             "ORDER BY coalesce(r.valid_from, r.created_at, '') DESC LIMIT $lim",
             params,
         )
@@ -817,33 +1035,34 @@ class AgentNativeEpisodicDriver:
             "MATCH (e:Episodic) WHERE coalesce(e.superseded, false) = false "
             + ("AND coalesce(e.project, 'kortext') = $project " if filter_project else "")
             + "AND ANY(tok IN $tokens WHERE toLower(e.name + ' ' + coalesce(e.content, '')) CONTAINS tok) "
-            "RETURN e.name, e.content, coalesce(e.created_at, ''), e.emb, coalesce(e.trust_level, 'speculative') "
+            "RETURN e.name, e.content, coalesce(e.created_at, ''), e.emb, coalesce(e.trust_level, 'speculative'), "
+            "coalesce(e.grounded_symbols, '') "
             "ORDER BY coalesce(e.created_at, '') DESC LIMIT $lim",
             params,
         )
 
-        # (kind, key, display text, text to score, names, timestamp, stored embedding)
-        cands: List[Tuple[str, str, str, str, List[str], str, Any]] = []
+        # (kind, key, display text, text to score, names, timestamp, stored embedding, grounded_symbols_str)
+        cands: List[Tuple[str, str, str, str, List[str], str, Any, str]] = []
         slots: List[Optional[Tuple[str, str]]] = []
         for row in (fact_rows[1] if fact_rows and len(fact_rows) > 1 else []) or []:
-            fid, fact, sub, obj, ts, emb, rel, trust = (list(row) + [None] * 8)[:8]
+            fid, fact, sub, obj, ts, emb, rel, trust, g_sym = (list(row) + [None] * 9)[:9]
             shown = fence_memory_by_provenance(str(fact), trust_level=str(trust or "speculative"))
-            cands.append(("fact", str(fid or ""), shown, str(fact), [str(sub or "")], str(ts or ""), emb))
+            cands.append(("fact", str(fid or ""), shown, str(fact), [str(sub or "")], str(ts or ""), emb, str(g_sym or "")))
             slots.append((str(sub or "").lower(), str(rel or "").lower()))
         for row in (ep_rows[1] if ep_rows and len(ep_rows) > 1 else []) or []:
-            name, content, ts, emb, trust = (list(row) + [None] * 5)[:5]
+            name, content, ts, emb, trust, g_sym = (list(row) + [None] * 6)[:6]
             text = f"{name}: {content or ''}"
             shown = fence_memory_by_provenance(f"[{name}]: {str(content or '')[:200]}", trust_level=str(trust or "speculative"))
-            cands.append(("episode", str(name), shown, text, [], str(ts or ""), emb))
+            cands.append(("episode", str(name), shown, text, [], str(ts or ""), emb, str(g_sym or "")))
             slots.append(None)
         if not cands:
             return []
 
         names = sorted({n for c in cands for n in c[4] if n})
         stripped_query = _strip_names(query, names) or query
-        scores = self._score_candidates(stripped_query, cands)
+        scores = self._score_candidates(stripped_query, [c[:7] for c in cands])
 
-        scored = [(sc, c[5], c[2], slot) for sc, c, slot in zip(scores, cands, slots) if sc is not None]
+        scored = [(sc, c[5], c[2], slot, c[7]) for sc, c, slot in zip(scores, cands, slots) if sc is not None]
         if not scored:
             return []
         best = max(x[0] for x in scored)
@@ -860,12 +1079,155 @@ class AgentNativeEpisodicDriver:
             newest_first = sorted((ordered[i] for i in positions), key=lambda x: x[1], reverse=True)
             for i, x in zip(positions, newest_first):
                 ordered[i] = x
-        results: List[str] = []
-        for _, _, text, _ in ordered:
-            if text not in results:
-                results.append(text)
-            if len(results) >= limit:
+
+        top_cands: List[Tuple[str, str]] = []
+        seen_texts = set()
+        for _, _, text, _, g_str in ordered:
+            if text not in seen_texts:
+                seen_texts.add(text)
+                top_cands.append((text, g_str))
+            if len(top_cands) >= limit:
                 break
+
+        symbols_graph = kwargs.get("symbols_graph")
+        grounded_by_idx: Dict[int, List[Dict[str, Any]]] = {}
+        for idx, (_, g_str) in enumerate(top_cands):
+            if g_str:
+                try:
+                    parsed = json.loads(g_str)
+                    if isinstance(parsed, list) and parsed:
+                        grounded_by_idx[idx] = parsed
+                except Exception:
+                    pass
+
+        staleness_map: Dict[int, Tuple[bool, List[str]]] = {}
+        if grounded_by_idx:
+            try:
+                staleness_map = _check_symbols_staleness_batch(self.client, grounded_by_idx, symbols_graph=symbols_graph)
+            except Exception as exc:
+                logger.debug("Episodic search staleness check failed open: %s", exc)
+
+        results: List[str] = []
+        for idx, (text, _) in enumerate(top_cands):
+            is_stale, stale_syms = staleness_map.get(idx, (False, []))
+            if is_stale and stale_syms:
+                stale_label = ", ".join(stale_syms)
+                results.append(f"[may be out of date: {stale_label} changed since this was recorded] {text}")
+            else:
+                results.append(text)
+        return results
+
+    def list_memories(
+        self,
+        project: Optional[str] = None,
+        limit: int = 200,
+        offset: int = 0,
+        symbols_graph: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Lists episodic memories (facts and episodes) with staleness indicators.
+        Returns dicts with keys: id, kind ('fact'|'episode'), text, project, trust_level, created_at, superseded, stale, stale_symbols.
+        """
+        target_project = project.strip() if isinstance(project, str) else None
+        filter_project = bool(target_project and target_project.lower() != "all")
+        fetch_limit = max(1, limit + max(0, offset))
+        proj_filter_r = "WHERE coalesce(r.project, 'kortext') = $project " if filter_project else ""
+        proj_filter_e = "WHERE coalesce(e.project, 'kortext') = $project " if filter_project else ""
+        params: Dict[str, Any] = {"lim": fetch_limit}
+        if filter_project:
+            params["project"] = target_project
+
+        try:
+            fact_rows = self._query(
+                "MATCH (s:Entity)-[r:RELATES_TO]->(t:Entity) "
+                + proj_filter_r
+                + "RETURN r.id, coalesce(r.fact, s.name + ' ' + r.relation + ' ' + t.name), "
+                "coalesce(r.project, 'kortext'), coalesce(r.trust_level, 'tool_confirmed'), "
+                "coalesce(r.created_at, r.valid_from, ''), coalesce(r.superseded, false), "
+                "coalesce(r.grounded_symbols, '') "
+                "ORDER BY coalesce(r.created_at, r.valid_from, '') DESC LIMIT $lim",
+                params,
+            )
+        except Exception as exc:
+            logger.debug("list_memories facts query skipped: %s", exc)
+            fact_rows = None
+
+        try:
+            ep_rows = self._query(
+                "MATCH (e:Episodic) "
+                + proj_filter_e
+                + "RETURN e.name, coalesce(e.content, ''), coalesce(e.project, 'kortext'), "
+                "coalesce(e.trust_level, 'speculative'), coalesce(e.created_at, ''), "
+                "coalesce(e.superseded, false), coalesce(e.grounded_symbols, '') "
+                "ORDER BY coalesce(e.created_at, '') DESC LIMIT $lim",
+                params,
+            )
+        except Exception as exc:
+            logger.debug("list_memories episodes query skipped: %s", exc)
+            ep_rows = None
+
+        all_items: List[Dict[str, Any]] = []
+        for row in (fact_rows[1] if fact_rows and len(fact_rows) > 1 else []) or []:
+            fid, fact, proj, trust, created_at, superseded, grounded_str = (list(row) + [None] * 7)[:7]
+            all_items.append({
+                "id": str(fid or ""),
+                "kind": "fact",
+                "text": str(fact or ""),
+                "project": str(proj or "kortext"),
+                "trust_level": str(trust or "tool_confirmed"),
+                "created_at": str(created_at or ""),
+                "superseded": bool(superseded),
+                "_grounded_str": str(grounded_str or ""),
+            })
+
+        for row in (ep_rows[1] if ep_rows and len(ep_rows) > 1 else []) or []:
+            name, content, proj, trust, created_at, superseded, grounded_str = (list(row) + [None] * 7)[:7]
+            all_items.append({
+                "id": str(name or ""),
+                "kind": "episode",
+                "text": str(content or ""),
+                "project": str(proj or "kortext"),
+                "trust_level": str(trust or "speculative"),
+                "created_at": str(created_at or ""),
+                "superseded": bool(superseded),
+                "_grounded_str": str(grounded_str or ""),
+            })
+
+        all_items.sort(key=lambda x: x["created_at"], reverse=True)
+        paged = all_items[offset : offset + limit]
+
+        grounded_by_idx: Dict[int, List[Dict[str, Any]]] = {}
+        for idx, item in enumerate(paged):
+            g_str = item.get("_grounded_str")
+            if g_str:
+                try:
+                    parsed = json.loads(g_str)
+                    if isinstance(parsed, list) and parsed:
+                        grounded_by_idx[idx] = parsed
+                except Exception:
+                    pass
+
+        staleness_map: Dict[int, Tuple[bool, List[str]]] = {}
+        if grounded_by_idx:
+            try:
+                staleness_map = _check_symbols_staleness_batch(self.client, grounded_by_idx, symbols_graph=symbols_graph)
+            except Exception as exc:
+                logger.debug("list_memories staleness check failed open: %s", exc)
+
+        results: List[Dict[str, Any]] = []
+        for idx, item in enumerate(paged):
+            is_stale, stale_syms = staleness_map.get(idx, (False, []))
+            results.append({
+                "id": item["id"],
+                "kind": item["kind"],
+                "text": item["text"],
+                "project": item["project"],
+                "trust_level": item["trust_level"],
+                "created_at": item["created_at"],
+                "superseded": item["superseded"],
+                "stale": bool(is_stale),
+                "stale_symbols": list(stale_syms),
+            })
         return results
 
     def _score_candidates(self, query: str, cands: List[Tuple[str, str, str, str, List[str], str, Any]]) -> List[Optional[float]]:

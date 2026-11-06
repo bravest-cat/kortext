@@ -111,6 +111,7 @@ def test_metric_helpers():
 @pytest.mark.usefixtures("real_falkordb")
 def test_benchmark_runner_end_to_end_on_temp_repo(tmp_path: Path):
     """Runs runner end to end on small temp repo with real FalkorDB and verifies cleanup."""
+    pytest.importorskip("tiktoken")
     # Create small mock project
     proj_dir = tmp_path / "mock_project"
     proj_dir.mkdir()

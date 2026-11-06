@@ -289,3 +289,11 @@ async def run_query(request: Request):
                 "token_count": 0,
             },
         )
+
+
+@router.get("/api/memory")
+async def get_memories(project: Optional[str] = None, limit: int = 200, offset: int = 0):
+    """Lists episodic memories with staleness indicators."""
+    from kortext.episodic.driver import AgentNativeEpisodicDriver
+    driver = AgentNativeEpisodicDriver(host=FALKORDB_HOST, port=FALKORDB_PORT)
+    return await asyncio.to_thread(driver.list_memories, project=project, limit=limit, offset=offset)

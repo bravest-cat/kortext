@@ -389,10 +389,11 @@ def execute_rg_baseline(
     task: Dict[str, Any],
     root_path: Path,
     extra_exclude_globs: Optional[List[str]] = None,
+    pattern: Optional[str] = None,
 ) -> Tuple[str, List[str], float, int]:
     """Executes baseline rg -n -C 5 <rg_pattern> over root_path scoped to indexed file set."""
     rg_bin = shutil.which("rg") or "rg"
-    pattern = task["rg_pattern"]
+    pat = pattern or task.get("rg_pattern", "")
 
     cmd = [
         rg_bin,
@@ -409,7 +410,7 @@ def execute_rg_baseline(
     if extra_exclude_globs:
         for g in extra_exclude_globs:
             cmd.extend(["--glob", f"!{g}"])
-    cmd.extend(["-e", pattern])
+    cmd.extend(["-e", pat])
 
     t0 = time.perf_counter()
     try:
@@ -537,7 +538,8 @@ async def run_benchmark_async(
                 gold_set = set(gold_files)
 
                 kortext_runs: List[Dict[str, Any]] = []
-                rg_runs: List[Dict[str, Any]] = []
+                rg_naive_runs: List[Dict[str, Any]] = []
+                rg_informed_runs: List[Dict[str, Any]] = []
 
                 for rep in range(k):
                     # 1. MCP Tool Run
@@ -562,24 +564,47 @@ async def run_benchmark_async(
                         "passed": t_pass,
                     })
 
-                    # 2. Ripgrep Baseline Run
-                    rg_out, rg_files, rg_lat, rg_tok = execute_rg_baseline(
+                    # 2. Ripgrep Naive Baseline Run
+                    rgn_out, rgn_files, rgn_lat, rgn_tok = execute_rg_baseline(
                         task=task,
                         root_path=root_path,
                         extra_exclude_globs=extra_rg_globs,
+                        pattern=task.get("rg_pattern"),
                     )
-                    rg_recall = compute_recall_at_5(rg_files, gold_set)
-                    rg_mrr = compute_mrr(rg_files, gold_set)
-                    rg_pass = any(f in gold_set for f in rg_files)
+                    rgn_recall = compute_recall_at_5(rgn_files, gold_set)
+                    rgn_mrr = compute_mrr(rgn_files, gold_set)
+                    rgn_pass = any(f in gold_set for f in rgn_files)
 
-                    rg_runs.append({
+                    rg_naive_runs.append({
                         "rep": rep + 1,
-                        "latency_ms": rg_lat,
-                        "reply_tokens": rg_tok,
-                        "retrieved_files": rg_files,
-                        "recall_at_5": rg_recall,
-                        "mrr": rg_mrr,
-                        "passed": rg_pass,
+                        "latency_ms": rgn_lat,
+                        "reply_tokens": rgn_tok,
+                        "retrieved_files": rgn_files,
+                        "recall_at_5": rgn_recall,
+                        "mrr": rgn_mrr,
+                        "passed": rgn_pass,
+                    })
+
+                    # 3. Ripgrep Informed Baseline Run
+                    rgi_pat = task.get("rg_pattern_informed") or task.get("rg_pattern")
+                    rgi_out, rgi_files, rgi_lat, rgi_tok = execute_rg_baseline(
+                        task=task,
+                        root_path=root_path,
+                        extra_exclude_globs=extra_rg_globs,
+                        pattern=rgi_pat,
+                    )
+                    rgi_recall = compute_recall_at_5(rgi_files, gold_set)
+                    rgi_mrr = compute_mrr(rgi_files, gold_set)
+                    rgi_pass = any(f in gold_set for f in rgi_files)
+
+                    rg_informed_runs.append({
+                        "rep": rep + 1,
+                        "latency_ms": rgi_lat,
+                        "reply_tokens": rgi_tok,
+                        "retrieved_files": rgi_files,
+                        "recall_at_5": rgi_recall,
+                        "mrr": rgi_mrr,
+                        "passed": rgi_pass,
                     })
 
                 k_pass_at_k = any(r["passed"] for r in kortext_runs)
@@ -587,15 +612,21 @@ async def run_benchmark_async(
                 k_mean_recall = sum(r["recall_at_5"] for r in kortext_runs) / float(k)
                 k_mean_mrr = sum(r["mrr"] for r in kortext_runs) / float(k)
 
-                rg_pass_at_k = any(r["passed"] for r in rg_runs)
-                rg_pass_pow_k = all(r["passed"] for r in rg_runs)
-                rg_mean_recall = sum(r["recall_at_5"] for r in rg_runs) / float(k)
-                rg_mean_mrr = sum(r["mrr"] for r in rg_runs) / float(k)
+                rgn_pass_at_k = any(r["passed"] for r in rg_naive_runs)
+                rgn_pass_pow_k = all(r["passed"] for r in rg_naive_runs)
+                rgn_mean_recall = sum(r["recall_at_5"] for r in rg_naive_runs) / float(k)
+                rgn_mean_mrr = sum(r["mrr"] for r in rg_naive_runs) / float(k)
+
+                rgi_pass_at_k = any(r["passed"] for r in rg_informed_runs)
+                rgi_pass_pow_k = all(r["passed"] for r in rg_informed_runs)
+                rgi_mean_recall = sum(r["recall_at_5"] for r in rg_informed_runs) / float(k)
+                rgi_mean_mrr = sum(r["mrr"] for r in rg_informed_runs) / float(k)
 
                 print(
                     f"[{idx:02d}/{len(questions):02d}] {t_id:<10} ({t_type:<6}) | "
-                    f"kortext: R@5={k_mean_recall:.2f} MRR={k_mean_mrr:.2f} pass@k={int(k_pass_at_k)} | "
-                    f"rg: R@5={rg_mean_recall:.2f} MRR={rg_mean_mrr:.2f} pass@k={int(rg_pass_at_k)}"
+                    f"kortext: R@5={k_mean_recall:.2f} MRR={k_mean_mrr:.2f} | "
+                    f"rg_naive: R@5={rgn_mean_recall:.2f} | "
+                    f"rg_informed: R@5={rgi_mean_recall:.2f}"
                 )
 
                 task_results.append({
@@ -606,6 +637,7 @@ async def run_benchmark_async(
                     "gold_files": gold_files,
                     "gold_symbols": task.get("gold_symbols", []),
                     "rg_pattern": task.get("rg_pattern"),
+                    "rg_pattern_informed": task.get("rg_pattern_informed"),
                     "kortext": {
                         "pass_at_k": k_pass_at_k,
                         "pass_pow_k": k_pass_pow_k,
@@ -613,12 +645,26 @@ async def run_benchmark_async(
                         "mean_mrr": k_mean_mrr,
                         "runs": kortext_runs,
                     },
+                    "rg_naive": {
+                        "pass_at_k": rgn_pass_at_k,
+                        "pass_pow_k": rgn_pass_pow_k,
+                        "mean_recall_at_5": rgn_mean_recall,
+                        "mean_mrr": rgn_mean_mrr,
+                        "runs": rg_naive_runs,
+                    },
+                    "rg_informed": {
+                        "pass_at_k": rgi_pass_at_k,
+                        "pass_pow_k": rgi_pass_pow_k,
+                        "mean_recall_at_5": rgi_mean_recall,
+                        "mean_mrr": rgi_mean_mrr,
+                        "runs": rg_informed_runs,
+                    },
                     "ripgrep_baseline": {
-                        "pass_at_k": rg_pass_at_k,
-                        "pass_pow_k": rg_pass_pow_k,
-                        "mean_recall_at_5": rg_mean_recall,
-                        "mean_mrr": rg_mean_mrr,
-                        "runs": rg_runs,
+                        "pass_at_k": rgn_pass_at_k,
+                        "pass_pow_k": rgn_pass_pow_k,
+                        "mean_recall_at_5": rgn_mean_recall,
+                        "mean_mrr": rgn_mean_mrr,
+                        "runs": rg_naive_runs,
                     },
                 })
 
@@ -677,12 +723,16 @@ async def run_benchmark_async(
         name = tool_names.get(tt, tt)
         by_tool[name] = {
             "kortext": _aggregate(sub, "kortext"),
-            "ripgrep_baseline": _aggregate(sub, "ripgrep_baseline"),
+            "rg_naive": _aggregate(sub, "rg_naive"),
+            "rg_informed": _aggregate(sub, "rg_informed"),
+            "ripgrep_baseline": _aggregate(sub, "rg_naive"),
         }
 
     overall = {
         "kortext": _aggregate(task_results, "kortext"),
-        "ripgrep_baseline": _aggregate(task_results, "ripgrep_baseline"),
+        "rg_naive": _aggregate(task_results, "rg_naive"),
+        "rg_informed": _aggregate(task_results, "rg_informed"),
+        "ripgrep_baseline": _aggregate(task_results, "rg_naive"),
     }
 
     payload = {
@@ -713,44 +763,34 @@ async def run_benchmark_async(
 
 
 def _print_summary_table(summary: Dict[str, Any]) -> None:
-    """Prints a clear plain English comparison table of Kortext vs Ripgrep baseline."""
+    """Prints a clear plain English comparison table of Kortext vs Ripgrep baselines."""
     print("\n" + "=" * 90)
-    print(f"{'Tool':<32} {'System':<10} {'Pass@k':<8} {'Pass^k':<8} {'R@5':<8} {'MRR':<8} {'Lat p50':<10} {'Tokens':<8}")
+    print(f"{'Tool':<32} {'System':<12} {'Pass@k':<8} {'Pass^k':<8} {'R@5':<8} {'MRR':<8} {'Lat p50':<10} {'Tokens':<8}")
     print("-" * 90)
 
     by_tool = summary.get("by_tool", {})
     for tool_name, data in by_tool.items():
-        k_d = data.get("kortext", {})
-        rg_d = data.get("ripgrep_baseline", {})
-        print(
-            f"{tool_name:<32} {'kortext':<10} "
-            f"{k_d.get('pass_at_k', 0.0):<8.2f} {k_d.get('pass_pow_k', 0.0):<8.2f} "
-            f"{k_d.get('recall_at_5', 0.0):<8.2f} {k_d.get('mrr', 0.0):<8.2f} "
-            f"{k_d.get('latency_p50_ms', 0.0):<10.1f} {k_d.get('reply_tokens_avg', 0.0):<8.0f}"
-        )
-        print(
-            f"{'':<32} {'ripgrep':<10} "
-            f"{rg_d.get('pass_at_k', 0.0):<8.2f} {rg_d.get('pass_pow_k', 0.0):<8.2f} "
-            f"{rg_d.get('recall_at_5', 0.0):<8.2f} {rg_d.get('mrr', 0.0):<8.2f} "
-            f"{rg_d.get('latency_p50_ms', 0.0):<10.1f} {rg_d.get('reply_tokens_avg', 0.0):<8.0f}"
-        )
+        for sys_key, sys_label in [("kortext", "kortext"), ("rg_naive", "rg_naive"), ("rg_informed", "rg_informed")]:
+            d = data.get(sys_key, {})
+            prefix = tool_name if sys_key == "kortext" else ""
+            print(
+                f"{prefix:<32} {sys_label:<12} "
+                f"{d.get('pass_at_k', 0.0):<8.2f} {d.get('pass_pow_k', 0.0):<8.2f} "
+                f"{d.get('recall_at_5', 0.0):<8.2f} {d.get('mrr', 0.0):<8.2f} "
+                f"{d.get('latency_p50_ms', 0.0):<10.1f} {d.get('reply_tokens_avg', 0.0):<8.0f}"
+            )
         print("-" * 90)
 
     ov = summary.get("overall", {})
-    k_ov = ov.get("kortext", {})
-    rg_ov = ov.get("ripgrep_baseline", {})
-    print(
-        f"{'OVERALL':<32} {'kortext':<10} "
-        f"{k_ov.get('pass_at_k', 0.0):<8.2f} {k_ov.get('pass_pow_k', 0.0):<8.2f} "
-        f"{k_ov.get('recall_at_5', 0.0):<8.2f} {k_ov.get('mrr', 0.0):<8.2f} "
-        f"{k_ov.get('latency_p50_ms', 0.0):<10.1f} {k_ov.get('reply_tokens_avg', 0.0):<8.0f}"
-    )
-    print(
-        f"{'':<32} {'ripgrep':<10} "
-        f"{rg_ov.get('pass_at_k', 0.0):<8.2f} {rg_ov.get('pass_pow_k', 0.0):<8.2f} "
-        f"{rg_ov.get('recall_at_5', 0.0):<8.2f} {rg_ov.get('mrr', 0.0):<8.2f} "
-        f"{rg_ov.get('latency_p50_ms', 0.0):<10.1f} {rg_ov.get('reply_tokens_avg', 0.0):<8.0f}"
-    )
+    for sys_key, sys_label in [("kortext", "kortext"), ("rg_naive", "rg_naive"), ("rg_informed", "rg_informed")]:
+        d = ov.get(sys_key, {})
+        prefix = "OVERALL" if sys_key == "kortext" else ""
+        print(
+            f"{prefix:<32} {sys_label:<12} "
+            f"{d.get('pass_at_k', 0.0):<8.2f} {d.get('pass_pow_k', 0.0):<8.2f} "
+            f"{d.get('recall_at_5', 0.0):<8.2f} {d.get('mrr', 0.0):<8.2f} "
+            f"{d.get('latency_p50_ms', 0.0):<10.1f} {d.get('reply_tokens_avg', 0.0):<8.0f}"
+        )
     print("=" * 90 + "\n")
 
 

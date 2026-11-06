@@ -10,7 +10,8 @@
       "is_embedded_qdrant_locked",
       "EmbeddedQdrantLockError"
     ],
-    "rg_pattern": "vector|store|lock"
+    "rg_pattern": "vector|store|lock",
+    "rg_pattern_informed": "EmbeddedQdrantLockError|is_embedded_qdrant_locked"
   },
   {
     "id": "search_02",
@@ -23,7 +24,8 @@
       "ensure_running",
       "_spawn"
     ],
-    "rg_pattern": "daemon|process|spawning"
+    "rg_pattern": "daemon|process|spawning",
+    "rg_pattern_informed": "def ensure_running|def _spawn"
   },
   {
     "id": "search_03",
@@ -36,7 +38,8 @@
       "CausalSanitizer",
       "SecurityViolation"
     ],
-    "rg_pattern": "prompt|injection|payloads"
+    "rg_pattern": "prompt|injection|payloads",
+    "rg_pattern_informed": "class CausalSanitizer|class SecurityViolation"
   },
   {
     "id": "search_04",
@@ -48,7 +51,8 @@
     "gold_symbols": [
       "TaskDAGTracker"
     ],
-    "rg_pattern": "task|dependencies|graph"
+    "rg_pattern": "task|dependencies|graph",
+    "rg_pattern_informed": "class TaskDAGTracker|get_ready_tasks"
   },
   {
     "id": "search_05",
@@ -60,7 +64,8 @@
     "gold_symbols": [
       "HandoffManager"
     ],
-    "rg_pattern": "session|handoff|batons"
+    "rg_pattern": "session|handoff|batons",
+    "rg_pattern_informed": "class HandoffManager|memory_session_handoff"
   },
   {
     "id": "search_06",
@@ -72,7 +77,8 @@
     "gold_symbols": [
       "DreamEngine"
     ],
-    "rg_pattern": "consolidation|prune|cluster"
+    "rg_pattern": "consolidation|prune|cluster",
+    "rg_pattern_informed": "class KortextDreamEngine|run_dream_cycle"
   },
   {
     "id": "search_07",
@@ -84,7 +90,8 @@
     "gold_symbols": [
       "rank_candidates_rrf"
     ],
-    "rg_pattern": "rankings|dense|lexical"
+    "rg_pattern": "rankings|dense|lexical",
+    "rg_pattern_informed": "def rank_candidates_rrf"
   },
   {
     "id": "search_08",
@@ -97,7 +104,8 @@
       "SymbolGraphTraversalMixin",
       "trace_symbol_impact"
     ],
-    "rg_pattern": "traversal|blast|radius"
+    "rg_pattern": "traversal|blast|radius",
+    "rg_pattern_informed": "trace_symbol_impact|SymbolGraphTraversalMixin"
   },
   {
     "id": "search_09",
@@ -109,7 +117,8 @@
     "gold_symbols": [
       "AgentNativeEpisodicDriver"
     ],
-    "rg_pattern": "episodic|memory|validity"
+    "rg_pattern": "episodic|memory|validity",
+    "rg_pattern_informed": "class AgentNativeEpisodicDriver|_score_candidates"
   },
   {
     "id": "search_10",
@@ -122,7 +131,8 @@
       "DebouncedChangeHandler",
       "KortextIncrementalSync"
     ],
-    "rg_pattern": "debounced|queued|incremental"
+    "rg_pattern": "debounced|queued|incremental",
+    "rg_pattern_informed": "class DebouncedChangeHandler|class KortextIncrementalSync"
   },
   {
     "id": "seek_01",
