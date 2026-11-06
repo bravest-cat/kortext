@@ -47,7 +47,7 @@ def test_audit1_2a_incremental_sync_enabled_and_watcher_embedded_fix(tmp_path, m
 def test_audit1_2b_antigravity_manifests_subagents_and_skills_schema():
     """Audit 1 Section 2B: subagents declare Kortext MCP tools; skills have clean frontmatter."""
     plugin_json = json.loads((KORTEXT_ROOT / "integrations" / "antigravity" / "plugin.json").read_text(encoding="utf-8"))
-    assert plugin_json.get("version") in (None, "2.0.0")
+    assert plugin_json.get("version") in (None, "2.1.0")
 
     for agent_md in sorted((KORTEXT_ROOT / "integrations" / "antigravity" / "agents").glob("*.md")):
         text = agent_md.read_text(encoding="utf-8")
