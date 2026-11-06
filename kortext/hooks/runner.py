@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sys
+from types import MappingProxyType
 from typing import Any, Mapping, Optional
 
 from kortext.hooks.context import HookContext
@@ -52,8 +53,30 @@ def emit_response(
     if ev == "post_tool":
         output = {}
     elif ev in ("pre_invoke", "session_start", "sessionstart"):
-        if data and "injectSteps" in data and data["injectSteps"]:
-            output["injectSteps"] = list(data["injectSteps"])
+        term_behavior = str(data.get("terminationBehavior", "")) if data else ""
+        if decision in ("terminate", "deny") and not term_behavior:
+            term_behavior = "terminate"
+
+        raw_steps = list(data.get("injectSteps", ())) if data else []
+
+        if term_behavior == "terminate":
+            # Only error messages are kept on terminate; other steps must not reach the model
+            err_steps = [
+                step
+                for step in raw_steps
+                if isinstance(step, (dict, MappingProxyType)) and "errorMessage" in step
+            ]
+            if not err_steps:
+                msg = reason or "Execution terminated by hook"
+                err_steps = [{"errorMessage": {"userMessage": msg}}]
+            inject_steps = err_steps
+        else:
+            inject_steps = raw_steps
+
+        if inject_steps:
+            output["injectSteps"] = inject_steps
+        if term_behavior:
+            output["terminationBehavior"] = term_behavior
     elif ev == "post_invoke":
         inject_steps = list(data.get("injectSteps", ())) if data else []
         term_behavior = str(data.get("terminationBehavior", "")) if data else ""

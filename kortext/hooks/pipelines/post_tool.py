@@ -549,13 +549,14 @@ class ContextAndLoopAdvisor:
             )
 
             steps = context.read_transcript_steps()
+            conv_id = getattr(context, "conversation_id", None) or context.session_id
             token_state = resolve_session_token_state(
                 raw_payload=context.raw_payload,
                 transcript_path=context.transcript_path,
                 steps=steps,
                 model_name=context.model_name,
+                session_id=conv_id,
             )
-            conv_id = getattr(context, "conversation_id", None) or context.session_id
             wm_info = check_and_update_compaction_watermark(
                 conversation_id=conv_id,
                 current_tokens=token_state.estimated_tokens,

@@ -380,6 +380,7 @@ class ContextBudgetAdvisor:
             raw_payload=context.raw_payload,
             transcript_path=context.transcript_path,
             model_name=context.model_name,
+            session_id=getattr(context, "conversation_id", "") or context.session_id,
         )
         est_tokens = token_state.estimated_tokens
         used_pct = token_state.used_percentage
@@ -527,6 +528,57 @@ class InvariantInjector:
         )
 
 
+class PromptSecretInterceptor:
+    """
+    Checks context.last_user_input for credentials and terminates turn before model call.
+    Active in standard and strict profiles unless KORTEXT_BLOCK_PROMPT_SECRETS=0.
+    """
+
+    def process(self, context: HookContext) -> InterceptorResult:
+        if os.getenv("KORTEXT_BLOCK_PROMPT_SECRETS", "1").strip().lower() in ("0", "false", "no", "off"):
+            return InterceptorResult.allow()
+
+        from kortext.hooks.runner import get_hook_profile
+
+        profile = get_hook_profile()
+        if profile not in ("standard", "strict"):
+            return InterceptorResult.allow()
+
+        user_input = getattr(context, "last_user_input", "") or ""
+        if not user_input or not user_input.strip():
+            return InterceptorResult.allow()
+
+        from kortext.trust.sanitizer import (
+            SECRET_PATTERNS,
+            normalize_for_security_scan,
+        )
+
+        candidates = [user_input]
+        norm = normalize_for_security_scan(user_input)
+        if norm and norm != user_input:
+            candidates.append(norm)
+
+        for text_to_scan in candidates:
+            if any(p.search(text_to_scan) for p in SECRET_PATTERNS):
+                user_msg = (
+                    "Blocked: Prompt contains potential credentials or sensitive tokens "
+                    "(API keys, access tokens, or private keys). Please remove credentials "
+                    "before submitting."
+                )
+                return InterceptorResult(
+                    decision="terminate",
+                    reason="Prompt contains credentials",
+                    data=MappingProxyType({
+                        "terminationBehavior": "terminate",
+                        "injectSteps": (
+                            {"errorMessage": {"userMessage": user_msg}},
+                        ),
+                    }),
+                )
+
+        return InterceptorResult.allow()
+
+
 class PreInvokePipeline:
     """
     Dispatches PreInvocation interceptors and consolidates any injected ephemeralMessage steps.
@@ -538,6 +590,7 @@ class PreInvokePipeline:
             self.interceptors = tuple(interceptors)
         else:
             default_list: List[Any] = [
+                PromptSecretInterceptor(),
                 SubstrateHealthProbe(),
                 FrontierDAGNotifier(),
                 BoostPromptGroundingProbe(),
@@ -560,6 +613,11 @@ class PreInvokePipeline:
                     res = interceptor.check(context)
                 else:
                     continue
+
+                if res.decision in ("terminate", "deny") or (
+                    res.data and res.data.get("terminationBehavior") == "terminate"
+                ):
+                    return res
 
                 if res.data:
                     for k, v in res.data.items():

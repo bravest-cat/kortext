@@ -55,6 +55,8 @@ from kortext.server_helpers import (
     _filter_untrusted_injection_chunks,
     _format_federated_markdown,
     _validate_index_path,
+    enforce_reply_size_limit,
+    extract_root_conversation_id,
 )
 from kortext.symbols.graph import SymbolGraphManager
 from kortext.trust.sanitizer import CausalSanitizer, SecurityViolation
@@ -266,7 +268,7 @@ async def search_knowledge_and_memory(
     res_copy = _filter_untrusted_injection_chunks(res)
     if include_markdown:
         res_copy["markdown"] = _format_federated_markdown(res_copy, query=query, token_budget=token_budget)
-    return json.dumps(res_copy, separators=(",", ":"))
+    return enforce_reply_size_limit(res_copy, item_keys=["code_chunks", "episodic_history", "symbols", "symbolic_context"])
 
 
 # ── Tool 2: Record ─────────────────────────────────────────────────────────
@@ -307,19 +309,7 @@ async def record_system_outcome(
     Returns:
         Confirmation with paths to KG and journal.
     """
-    root_conv_id: Optional[str] = None
-    if ctx is not None:
-        try:
-            req_ctx = getattr(ctx, "request_context", None)
-            meta = getattr(req_ctx, "meta", None)
-            if isinstance(meta, dict):
-                root_conv_id = meta.get("antigravity.google/root_conversation_id")
-            elif meta is not None:
-                root_conv_id = getattr(meta, "root_conversation_id", None) or getattr(
-                    getattr(meta, "model_extra", {}), "get", lambda *_: None
-                )("antigravity.google/root_conversation_id")
-        except Exception:
-            root_conv_id = None
+    root_conv_id = extract_root_conversation_id(ctx)
     if root_conv_id:
         tags = list(tags or [])
         conv_tag = f"root_conv:{root_conv_id}"
@@ -808,8 +798,10 @@ async def seek_symbol(
 
         seeker = SymbolSeekEngine()
         if detail_level != "skeleton":
-            return seeker.seek_symbol(symbol_name, detail_level=detail_level, file_hint=file_hint)
-        return seeker.seek_symbol(symbol_name, file_hint=file_hint)
+            raw_res = seeker.seek_symbol(symbol_name, detail_level=detail_level, file_hint=file_hint)
+        else:
+            raw_res = seeker.seek_symbol(symbol_name, file_hint=file_hint)
+        return enforce_reply_size_limit(raw_res, item_keys=["matches"])
 
     return await asyncio.to_thread(_do_seek)
 
@@ -886,6 +878,8 @@ async def memory_session_handoff(
     unresolved_questions: Optional[list[str]] = None,
     active_blast_radius: Optional[list[str]] = None,
     baton_id: Optional[str] = None,
+    root_conversation_id: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> str:
     """
     Args:
@@ -896,9 +890,12 @@ async def memory_session_handoff(
         unresolved_questions: List of open questions or blockers.
         active_blast_radius:  List of modified or impacted files/symbols.
         baton_id:             Specific baton ID to read or mark completed.
+        root_conversation_id: Optional root conversation identifier to scope handoffs.
+        ctx:                  Optional FastMCP request context carrying Antigravity metadata.
     Returns:
         Formatted confirmation or JSON baton payload.
     """
+    conv_id = root_conversation_id or extract_root_conversation_id(ctx)
     def _do_handoff() -> str:
         manager = HandoffManager(HANDOFFS_DIR)
         return manager.execute(
@@ -909,6 +906,7 @@ async def memory_session_handoff(
             unresolved_questions=unresolved_questions,
             active_blast_radius=active_blast_radius,
             baton_id=baton_id,
+            root_conversation_id=conv_id,
         )
 
     return await asyncio.to_thread(_do_handoff)

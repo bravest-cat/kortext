@@ -281,6 +281,7 @@ with patch('kortext.tasks.tracker.TaskDAGTracker', mock_tracker):
         assert "tasks remain in DAG" in res["reason"]
 
     def test_check_falkordb_status_uds_and_tcp_fallback(self):
+        import os
         from unittest.mock import patch
         from scripts.hooks.hook_pre_invoke import check_falkordb_status
 
@@ -288,9 +289,10 @@ with patch('kortext.tasks.tracker.TaskDAGTracker', mock_tracker):
         with patch("scripts.hooks.hook_pre_invoke.check_unix_socket", return_value=True):
             assert check_falkordb_status() is True
 
-        # Case 2: UDS is down, but TCP :6379 is active
+        # Case 2: UDS is down, but TCP is active
+        target_port = int(os.environ.get("FALKORDB_PORT", "6379"))
         with patch("scripts.hooks.hook_pre_invoke.check_unix_socket", return_value=False), \
-             patch("scripts.hooks.hook_pre_invoke.check_tcp_port", side_effect=lambda host, port, timeout_sec: port == 6379):
+             patch("scripts.hooks.hook_pre_invoke.check_tcp_port", side_effect=lambda host, port, timeout_sec: port in (6379, target_port)):
             assert check_falkordb_status() is True
 
         # Case 3: Both are down
@@ -393,6 +395,7 @@ assert any(f.get('fact') == 'Transcript full resolved' for f in call_facts)
         assert res["decision"] == "stop"
 
     def test_hook_pre_invoke_falkordb_uds_socket_probe_and_offline_alert(self):
+        import os
         from unittest.mock import patch
         from scripts.hooks.hook_pre_invoke import check_falkordb_status
 

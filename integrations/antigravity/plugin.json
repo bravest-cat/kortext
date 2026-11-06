@@ -1,5 +1,6 @@
 {
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "kortext",
-  "description": "Kortext Knowledge OS: 5-Tier Dual-Memory, AST Code Intelligence, Task DAG Orchestration & Anti-Ripgrep Engine"
+  "version": "2.0.0",
+  "description": "Local memory and code intelligence for the Antigravity CLI: symbol navigation, vector search, and task tracking."
 }

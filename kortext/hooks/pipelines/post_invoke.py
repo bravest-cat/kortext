@@ -156,6 +156,7 @@ class TokenUsageTracker:
                 raw_payload=context.raw_payload,
                 transcript_path=context.transcript_path,
                 model_name=context.model_name,
+                session_id=getattr(context, "conversation_id", "") or context.session_id,
             )
             used_pct = token_state.used_percentage
             record = {

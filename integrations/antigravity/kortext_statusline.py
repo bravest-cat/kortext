@@ -20,6 +20,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import time
 from typing import Any, Dict, Optional, Tuple
@@ -113,6 +114,45 @@ def read_hud_snapshot(
         return data
     except Exception:
         return None
+
+
+def _trigger_detached_refresh(kortext_home: Path, project_id: Optional[str] = None) -> None:
+    """Spawns a detached background child process to refresh hud_state.json if not already running."""
+    run_dir = kortext_home / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = run_dir / "statusline_refresh.lock"
+    now = time.time()
+    if lock_file.is_file():
+        try:
+            mtime = lock_file.stat().st_mtime
+            if now - mtime < 15.0:
+                return
+        except OSError:
+            pass
+
+    try:
+        lock_file.write_text(str(os.getpid()), encoding="utf-8")
+    except OSError:
+        pass
+
+    kwargs: Dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        detached_flag = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        new_grp = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        kwargs["creationflags"] = detached_flag | new_grp
+    else:
+        kwargs["start_new_session"] = True
+
+    script_path = str(Path(__file__).resolve())
+    cmd = [sys.executable, script_path, "--refresh-only"]
+    try:
+        subprocess.Popen(cmd, **kwargs)
+    except Exception:
+        pass
 
 
 def write_hud_snapshot(
@@ -331,6 +371,10 @@ def format_kortext_badge(compact: bool = False, state: Optional[Dict[str, Any]] 
 
     exceeds_200k = bool(state.get("exceeds_200k_tokens", False))
 
+    if snap is None and use_snapshot:
+        _trigger_detached_refresh(kortext_home, project_id=proj)
+        snap = read_hud_snapshot(kortext_home, project_id=proj, max_age_sec=float("inf"))
+
     if snap is not None and "falkor_ok" in snap and "qdrant_ok" in snap and "omlx_ok" in snap:
         falkor_ok = bool(snap.get("falkor_ok"))
         qdrant_ok = bool(snap.get("qdrant_ok") or (watcher_info and watcher_info.get("status") == "running"))
@@ -353,44 +397,38 @@ def format_kortext_badge(compact: bool = False, state: Optional[Dict[str, Any]] 
                 exceeds_200k_tokens=exceeds_200k,
             )
     else:
-        falkor_ok = check_falkor(kortext_home)
-        qdrant_ok = check_qdrant(kortext_home) or bool(watcher_info and watcher_info.get("status") == "running")
-        omlx_ok = check_omlx()
-        ready_cnt, in_prog_cnt = query_dag_task_counts(falkor_ok, project_id=proj)
-        if use_snapshot:
-            write_hud_snapshot(
-                kortext_home,
-                falkor_ok,
-                qdrant_ok,
-                omlx_ok,
-                ready_cnt,
-                in_prog_cnt,
-                project_id=proj,
-                used_percentage=used_pct_val,
-                total_input_tokens=total_input_tokens,
-                context_window_size=context_window_size,
-                session_id=session_id,
-                exceeds_200k_tokens=exceeds_200k,
-            )
+        falkor_ok = False
+        qdrant_ok = bool(watcher_info and watcher_info.get("status") == "running")
+        omlx_ok = False
+        ready_cnt = 0
+        in_prog_cnt = 0
 
-    GREEN = "\033[32m"
-    YELLOW = "\033[33m"
-    RED = "\033[31m"
-    GRAY = "\033[90m"
-    CYAN = "\033[36m"
-    RESET = "\033[0m"
+    ascii_mode = os.getenv("KORTEXT_STATUSLINE_ASCII", "0").strip().lower() in ("1", "true", "yes")
 
-    dot_f = f"{GREEN}●{RESET}" if falkor_ok else f"{RED}●{RESET}"
-    dot_q = f"{GREEN}●{RESET}" if qdrant_ok else f"{RED}●{RESET}"
-    dot_m = f"{GREEN}●{RESET}" if omlx_ok else f"{GRAY}○{RESET}"
+    if ascii_mode:
+        GREEN = YELLOW = RED = GRAY = CYAN = RESET = ""
+        dot_f = "*" if falkor_ok else "x"
+        dot_q = "*" if qdrant_ok else "x"
+        dot_m = "*" if omlx_ok else "o"
+    else:
+        GREEN = "\033[32m"
+        YELLOW = "\033[33m"
+        RED = "\033[31m"
+        GRAY = "\033[90m"
+        CYAN = "\033[36m"
+        RESET = "\033[0m"
+
+        dot_f = f"{GREEN}●{RESET}" if falkor_ok else f"{RED}●{RESET}"
+        dot_q = f"{GREEN}●{RESET}" if qdrant_ok else f"{RED}●{RESET}"
+        dot_m = f"{GREEN}●{RESET}" if omlx_ok else f"{GRAY}○{RESET}"
 
     cli_tasks = int(state.get("task_count") or 0) if str(state.get("task_count") or "").isdigit() else 0
 
     dag_segment = ""
     if ready_cnt > 0 or in_prog_cnt > 0:
-        dag_segment = f" {CYAN}DAG:{ready_cnt}r/{in_prog_cnt}p{RESET}"
+        dag_segment = f" {CYAN}DAG:{ready_cnt}r/{in_prog_cnt}p{RESET}" if not ascii_mode else f" DAG:{ready_cnt}r/{in_prog_cnt}p"
     elif cli_tasks > 0:
-        dag_segment = f" {CYAN}T:{cli_tasks}{RESET}"
+        dag_segment = f" {CYAN}T:{cli_tasks}{RESET}" if not ascii_mode else f" T:{cli_tasks}"
 
     ctx_segment = ""
     compact_ctx_warn = ""
@@ -402,24 +440,34 @@ def format_kortext_badge(compact: bool = False, state: Optional[Dict[str, Any]] 
     if used_pct_val is not None or exceeds_200k:
         pct_num = used_pct_val if used_pct_val is not None else 100.0
         color = RED if (pct_num >= red_pct or exceeds_200k) else (YELLOW if pct_num >= yellow_pct else GREEN)
-        ctx_segment = f" {GRAY}Ctx:{RESET}{color}{pct_num:.0f}%{RESET}"
+        ctx_segment = f" {GRAY}Ctx:{RESET}{color}{pct_num:.0f}%{RESET}" if not ascii_mode else f" Ctx:{pct_num:.0f}%"
         pre_warn_pct = 18.0 if is_large_win else 55.0
         if pct_num >= warn_pct or exceeds_200k or (total_input_tokens and total_input_tokens >= 200_000):
-            compact_ctx_warn = f" {YELLOW}⚠️ Compact{RESET}"
+            compact_ctx_warn = " ! Compact" if ascii_mode else f" {YELLOW}⚠️ Compact{RESET}"
         elif pct_num >= pre_warn_pct or (total_input_tokens and total_input_tokens >= 180_000):
-            compact_ctx_warn = f" {YELLOW}⚡ Pre-Compact{RESET}"
+            compact_ctx_warn = " ! Pre-Compact" if ascii_mode else f" {YELLOW}⚡ Pre-Compact{RESET}"
 
     quota_segment = ""
     q_pct = _extract_quota_percentage(state.get("quota"))
     if q_pct is not None:
         q_color = RED if q_pct <= 15.0 else (YELLOW if q_pct <= 40.0 else GREEN)
-        quota_segment = f" {GRAY}Q:{RESET}{q_color}{q_pct:.0f}%{RESET}"
+        quota_segment = f" {GRAY}Q:{RESET}{q_color}{q_pct:.0f}%{RESET}" if not ascii_mode else f" Q:{q_pct:.0f}%"
 
     if compact:
+        if ascii_mode:
+            return f"| Kortext F:{dot_f} Q:{dot_q} M:{dot_m}{dag_segment}{compact_ctx_warn}"
         return f"{GRAY}│{RESET} {CYAN}Kortext{RESET} F:{dot_f} Q:{dot_q} M:{dot_m}{dag_segment}{compact_ctx_warn}"
 
     mode_str = str(state.get("execution_mode") or "").strip()
-    mode_segment = f" | {GRAY}Mode:{RESET} {mode_str}" if mode_str else ""
+    mode_segment = f" | {GRAY}Mode:{RESET} {mode_str}" if (mode_str and not ascii_mode) else (f" | Mode: {mode_str}" if mode_str else "")
+    if ascii_mode:
+        return (
+            f"Kortext "
+            f"[Falkor: {dot_f} | "
+            f"Qdrant: {dot_q} | "
+            f"oMLX: {dot_m}"
+            f"{dag_segment}{ctx_segment}{quota_segment}{mode_segment}]"
+        )
     return (
         f"{CYAN}🧠 Kortext{RESET} "
         f"[{GRAY}Falkor:{RESET} {dot_f} | "
@@ -517,6 +565,12 @@ def main():
             context_window_size=context_window_size,
             exceeds_200k_tokens=exceeds_200k,
         )
+        lock_file = kortext_home / "run" / "statusline_refresh.lock"
+        try:
+            if lock_file.is_file():
+                lock_file.unlink()
+        except OSError:
+            pass
         return
 
     if compact:
