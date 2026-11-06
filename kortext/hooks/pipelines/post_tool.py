@@ -26,6 +26,8 @@ FILE_MODIFYING_TOOLS = frozenset({
     "write_to_file",
     "replace_file_content",
     "multi_replace_file_content",
+    "write_file",
+    "edit_file",
 })
 
 MAX_SPOOL_FILES = 100
@@ -341,45 +343,6 @@ class TelemetrySpooler:
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry) + "\n")
 
-            if context.tool_name in ("seek_symbol", "trace_symbol_impact", "search_knowledge_and_memory"):
-                try:
-                    from kortext.savings import extract_files_and_sizes_from_reply, record_savings_event
-                    res_obj = context.tool_result or context.raw_payload.get("toolResult") or {}
-                    raw_text = ""
-                    if isinstance(res_obj, dict):
-                        content_list = res_obj.get("content")
-                        if isinstance(content_list, (list, tuple)):
-                            for item in content_list:
-                                if isinstance(item, dict) and "text" in item:
-                                    raw_text += item["text"]
-                        elif "output" in res_obj:
-                            raw_text = str(res_obj["output"])
-                        else:
-                            raw_text = json.dumps(dict(res_obj))
-                    elif isinstance(res_obj, str):
-                        raw_text = res_obj
-                    else:
-                        raw_text = str(res_obj)
-
-                    reply_bytes = len(raw_text.encode("utf-8"))
-                    file_bytes, files = extract_files_and_sizes_from_reply(raw_text)
-                    record_savings_event(
-                        event=context.tool_name,
-                        session_id=context.session_id or "",
-                        project=context.workspace_project or "kortext",
-                        reply_bytes=reply_bytes,
-                        file_bytes=file_bytes,
-                        files=files,
-                        query_or_symbol=str(
-                            context.tool_args.get("symbol_name")
-                            or context.tool_args.get("symbol")
-                            or context.tool_args.get("query")
-                            or ""
-                        ),
-                    )
-                except Exception as s_exc:
-                    logger.debug("Failed recording savings event: %s", s_exc)
-
             if context.tool_name == "run_command" and context.command_line:
                 cmd_lower = context.command_line.lower()
                 if any(m in cmd_lower for m in _TEST_CMD_MARKERS):
@@ -479,7 +442,14 @@ class ContextAndLoopAdvisor:
                 if not isinstance(t_args, (dict, MappingProxyType)):
                     continue
                 if t_name in FILE_MODIFYING_TOOLS:
-                    tf = t_args.get("TargetFile") or t_args.get("target_file") or t_args.get("path")
+                    tf = (
+                        t_args.get("Path")
+                        or t_args.get("TargetFile")
+                        or t_args.get("target_file")
+                        or t_args.get("path")
+                        or t_args.get("file_path")
+                        or t_args.get("filePath")
+                    )
                     if tf and str(tf) not in modified_files:
                         modified_files.append(str(tf))
                 elif "seek_symbol" in t_name or "trace_symbol_impact" in t_name:

@@ -25,7 +25,16 @@ def get_savings_file(home: Optional[Path] = None) -> Path:
     base = home or get_kortext_home()
     run_dir = base / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir / "savings.jsonl"
+    s_file = run_dir / "savings.jsonl"
+    # Create with mode 0600 on POSIX if it does not yet exist
+    if not s_file.exists():
+        try:
+            import os as _os
+            fd = _os.open(str(s_file), _os.O_CREAT | _os.O_WRONLY, 0o600)
+            _os.close(fd)
+        except Exception:
+            pass
+    return s_file
 
 
 def record_savings_event(
@@ -35,12 +44,12 @@ def record_savings_event(
     reply_bytes: int = 0,
     file_bytes: int = 0,
     files: Optional[Sequence[str]] = None,
-    query_or_symbol: str = "",
     home: Optional[Path] = None,
 ) -> None:
     """
     Appends a savings event to savings.jsonl.
     Must be cheap (under 2 ms), bounded (rotates at 5 MB), and never raises.
+    prompt or query text is never stored.
     """
     try:
         s_file = get_savings_file(home)
@@ -65,7 +74,6 @@ def record_savings_event(
             "reply_bytes": max(0, int(reply_bytes)),
             "file_bytes": max(0, int(file_bytes)),
             "files": list(files) if files else [],
-            "query_or_symbol": str(query_or_symbol or "")[:200],
         }
         line = json.dumps(record, separators=(",", ":")) + "\n"
         with open(s_file, "a", encoding="utf-8") as f:
@@ -102,7 +110,7 @@ def extract_files_and_sizes_from_reply(
 
     def _collect_paths(obj: Any) -> None:
         if isinstance(obj, dict):
-            for k in ("file_path", "filePath", "file", "path", "source_file", "source"):
+            for k in ("file_path", "filePath", "file", "path", "source_file"):
                 v = obj.get(k)
                 if isinstance(v, str) and len(v) > 2 and ("." in v or "/" in v or "\\" in v):
                     candidate_paths.add(v)

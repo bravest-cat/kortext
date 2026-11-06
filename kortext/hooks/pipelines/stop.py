@@ -33,6 +33,8 @@ OUTCOME_TOOLS = frozenset({
     "trigger_dream_mode",
 })
 
+VALID_TERMINATION_REASONS = frozenset({"model_stop", "NO_TOOL_CALL", ""})
+
 _EXPLICIT_RULE_RE = re.compile(r"(?:^|\n)\s*(?:Rule|Invariant)\s*:\s*([^\n]{12,240})", re.IGNORECASE)
 
 
@@ -140,7 +142,7 @@ class GroundTruthTestGate:
         self.enforce = enforce or os.getenv("KORTEXT_TEST_GATE_ENFORCE", "0") == "1"
 
     def process(self, context: HookContext) -> InterceptorResult:
-        if context.execution_num != 1:
+        if context.execution_num not in (0, 1):
             return InterceptorResult.allow()
 
         dirty_file = get_kortext_home() / "run" / "dirty_files.json"
@@ -238,9 +240,9 @@ class ProjectDAGGuard:
 
     def process(self, context: HookContext) -> InterceptorResult:
         if (
-            context.execution_num != 1
+            context.execution_num not in (0, 1)
             or not context.fully_idle
-            or (context.termination_reason and context.termination_reason != "model_stop")
+            or (context.termination_reason and context.termination_reason not in VALID_TERMINATION_REASONS)
         ):
             return InterceptorResult.allow()
 
@@ -344,9 +346,9 @@ class OutcomePersistenceGuard:
 
     def process(self, context: HookContext) -> InterceptorResult:
         if (
-            context.execution_num != 1
+            context.execution_num not in (0, 1)
             or not context.fully_idle
-            or (context.termination_reason and context.termination_reason != "model_stop")
+            or (context.termination_reason and context.termination_reason not in VALID_TERMINATION_REASONS)
         ):
             return InterceptorResult.allow()
 
@@ -384,6 +386,18 @@ class OutcomePersistenceGuard:
 
         if not self.enforce:
             return InterceptorResult.allow()
+
+        reminder_marker = "🧠 [Kortext Stop Guard]"
+        if context.execution_num > 0:
+            return InterceptorResult.allow()
+
+        if reminder_marker in context.last_user_input:
+            return InterceptorResult.allow()
+
+        for step in (context.read_transcript_steps() or ()):
+            step_content = str(step.get("content") or "")
+            if reminder_marker in step_content:
+                return InterceptorResult.allow()
 
         reason = (
             "🧠 [Kortext Stop Guard] Codebase files were modified in this session without "
@@ -552,11 +566,11 @@ class StopPipeline:
 
     def execute(self, context: HookContext) -> InterceptorResult:
         # Critical Antigravity Stop hook invariant (hooks.md):
-        # Never block termination if executionNum != 1, or if not a natural model_stop, or if background tasks are active.
+        # Never block termination if not fully idle or termination reason is not model_stop/NO_TOOL_CALL.
         if (
-            context.execution_num != 1
+            context.execution_num not in (0, 1)
             or not context.fully_idle
-            or (context.termination_reason and context.termination_reason != "model_stop")
+            or (context.termination_reason and context.termination_reason not in VALID_TERMINATION_REASONS)
         ):
             return InterceptorResult.stop()
 

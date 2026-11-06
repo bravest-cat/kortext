@@ -313,6 +313,20 @@ def test_affected_tests_complete_false_on_config():
         assert "uv run pytest -q" in res["command"]
 
 
+def test_affected_tests_complete_false_on_file_with_no_symbols():
+    # When a code file is changed but has no symbols in the graph
+    mock_diff = "diff --git a/kortext/empty_module.py b/kortext/empty_module.py\n@@ -1,5 +1,5 @@\n"
+    completed = subprocess.CompletedProcess(args=["git", "diff"], returncode=0, stdout=mock_diff, stderr="")
+    mock_client = MagicMock()
+    mock_client.query.return_value = ["header", []]
+    with patch("subprocess.run", return_value=completed), \
+         patch("kortext.affected.get_shared_falkordb_client", return_value=mock_client), \
+         patch("pathlib.Path.is_file", return_value=True):
+        res = find_affected_tests(workspace_root=".", base="HEAD")
+        assert res["complete"] is False
+        assert "no symbols in graph" in res["reason"]
+
+
 @pytest.mark.asyncio
 async def test_affected_mcp_tool_metadata():
     from kortext.server import mcp

@@ -298,6 +298,13 @@ def find_affected_tests(
                 for row in all_res[1]:
                     if row and row[0]:
                         changed_symbols.add(str(row[0]))
+                        found_syms_for_file = True
+
+        # A file in the graph with no symbols means the graph is incomplete for it.
+        # Callers cannot know which tests cover this file, so mark incomplete.
+        if not found_syms_for_file:
+            complete = False
+            incomplete_reasons.append(f"Changed file has no symbols in graph: {rel_path}")
 
     # 5. Walk callers upstream through the call graph to find test functions
     for sym_name in changed_symbols:

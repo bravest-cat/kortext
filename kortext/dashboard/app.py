@@ -138,13 +138,31 @@ async def favicon():
 
 
 
+def get_kortext_version() -> str:
+    try:
+        import importlib.metadata
+        return importlib.metadata.version("kortext")
+    except Exception:
+        try:
+            import tomllib
+            p = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
+            if p.is_file():
+                data = tomllib.loads(p.read_text(encoding="utf-8"))
+                return str(data.get("project", {}).get("version", "2.0.0"))
+        except Exception:
+            pass
+        return "2.0.0"
+
+
 @app.get("/", response_class=HTMLResponse)
 @app.head("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Serves the primary dashboard single-page web console."""
+    ver = get_kortext_version()
     return templates.TemplateResponse(
         request=request,
         name="index.html",
+        context={"version": ver},
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"},
     )
 

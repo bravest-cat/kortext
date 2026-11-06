@@ -238,7 +238,7 @@ mock_tracker = MagicMock()
 mock_tracker.return_value.get_ready_tasks.return_value = []
 with patch('kortext.tasks.tracker.TaskDAGTracker', mock_tracker):
     import hook_stop
-    payload = {{'executionNum': 1, 'terminationReason': 'model_stop', 'fullyIdle': True, 'transcriptPath': '{transcript}'}}
+    payload = {{'executionNum': 0, 'terminationReason': 'NO_TOOL_CALL', 'fullyIdle': True, 'transcriptPath': '{transcript}'}}
     with patch('hook_stop.get_hook_payload', return_value=payload):
         try:
             hook_stop.main()
@@ -252,6 +252,31 @@ with patch('kortext.tasks.tracker.TaskDAGTracker', mock_tracker):
         res = json.loads(proc.stdout)
         assert res["decision"] == "continue"
         assert "modified" in res["reason"].lower() and "record_system_outcome" in res["reason"]
+
+        # Above executionNum 0 allows stopping to prevent infinite loops
+        proc2 = subprocess.run(
+            [sys.executable, "-c", f"""
+from unittest.mock import patch, MagicMock
+import json, os, sys
+os.environ['KORTEXT_OUTCOME_GUARD_ENFORCE'] = '1'
+sys.path.insert(0, '{HOOKS_DIR}')
+mock_tracker = MagicMock()
+mock_tracker.return_value.get_ready_tasks.return_value = []
+with patch('kortext.tasks.tracker.TaskDAGTracker', mock_tracker):
+    import hook_stop
+    payload = {{'executionNum': 1, 'terminationReason': 'NO_TOOL_CALL', 'fullyIdle': True, 'transcriptPath': '{transcript}'}}
+    with patch('hook_stop.get_hook_payload', return_value=payload):
+        try:
+            hook_stop.main()
+        except SystemExit:
+            pass
+"""],
+            capture_output=True,
+            text=True
+        )
+        assert proc2.returncode == 0
+        res2 = json.loads(proc2.stdout)
+        assert res2["decision"] == "stop"
 
     def test_stop_hook_blocks_when_ready_tasks_in_dag(self):
         script = HOOKS_DIR / "hook_stop.py"

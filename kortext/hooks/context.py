@@ -80,7 +80,7 @@ class HookContext:
 
     @property
     def tool_name(self) -> str:
-        """Returns the normalized name of the tool being executed (stripping surface prefixes like 'client:')."""
+        """Returns the normalized name of the tool being executed (stripping surface prefixes like 'client:' or 'mcp_kortext_')."""
         name = str(
             self.tool_call.get("name")
             or self.tool_call.get("tool_name")
@@ -88,10 +88,15 @@ class HookContext:
             or self.raw_payload.get("toolName")
             or ""
         ).strip()
-        if ":" in name:
+        while ":" in name:
             prefix, bare = name.split(":", 1)
             if prefix in ("client", "default_api", "mcp", "kortext") and bare:
-                return bare
+                name = bare
+            else:
+                break
+        for pfx in ("client_", "default_api_", "mcp_kortext_", "mcp__kortext__", "mcp_", "kortext_"):
+            if name.startswith(pfx):
+                name = name[len(pfx):]
         return name
 
     @property
@@ -123,11 +128,13 @@ class HookContext:
         """Returns the target file path for file modification tools."""
         args = self.tool_args
         target = (
-            args.get("TargetFile")
+            args.get("Path")
+            or args.get("TargetFile")
             or args.get("target_file")
             or args.get("AbsolutePath")
             or args.get("path")
             or args.get("file_path")
+            or args.get("filePath")
             or ""
         )
         return str(target).strip()

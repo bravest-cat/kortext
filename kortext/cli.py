@@ -194,6 +194,7 @@ def cmd_init(args):
 
     # 4. Index target
     try:
+        print("Indexing workspace... The first index can take several minutes.")
         run_cli_ingest(str(target_path), force=False)
         print(f"Step 4/4: Indexed workspace at {target_path}.")
     except Exception as exc:

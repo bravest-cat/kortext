@@ -225,6 +225,34 @@ mcp = FastMCP(
 )
 
 
+def _record_tool_savings(
+    event: str,
+    reply_str: str,
+    ctx: Optional[Context] = None,
+    workspace_root: Optional[str] = None,
+    project: Optional[str] = None,
+) -> None:
+    """Records a lightweight savings event from tool output. Cheap and never raises."""
+    try:
+        from kortext.savings import extract_files_and_sizes_from_reply, record_savings_event
+        from kortext.server_helpers import extract_root_conversation_id
+
+        ws = Path(workspace_root) if workspace_root else None
+        file_bytes, files = extract_files_and_sizes_from_reply(reply_str, workspace_root=ws)
+        reply_bytes = len(reply_str.encode("utf-8"))
+        conv_id = extract_root_conversation_id(ctx) or ""
+        record_savings_event(
+            event=event,
+            session_id=conv_id,
+            project=project or "kortext",
+            reply_bytes=reply_bytes,
+            file_bytes=file_bytes,
+            files=files,
+        )
+    except Exception as exc:
+        logger.debug("Savings recording skipped for %s: %s", event, exc)
+
+
 # ── Tool 1: Retrieve ───────────────────────────────────────────────────────
 
 @mcp.tool(
@@ -243,6 +271,7 @@ async def search_knowledge_and_memory(
     detail_level: str = "balanced",
     project: Optional[str] = None,
     include_markdown: bool = False,
+    ctx: Optional[Context] = None,
 ) -> str:
     """
     Args:
@@ -253,6 +282,7 @@ async def search_knowledge_and_memory(
         detail_level:     Context detail level: 'compact', 'balanced', or 'comprehensive'.
         project:          Optional project scope, e.g. 'kortext', 'my_app', or 'all' to query across all projects.
         include_markdown: If True, also includes a pre-rendered 'markdown' string alongside the JSON arrays (default False to avoid token duplication).
+        ctx:              Optional FastMCP request context.
     Returns:
         Compact JSON envelope with 4 in-budget memory tiers (Tier 0: symbolic_context,
         Tier 1: code_chunks, Tier 2: episodic_history, Tier 3: architectural_overview) and total_estimated_tokens.
@@ -272,7 +302,9 @@ async def search_knowledge_and_memory(
     res_copy = _filter_untrusted_injection_chunks(res)
     if include_markdown:
         res_copy["markdown"] = _format_federated_markdown(res_copy, query=query, token_budget=token_budget)
-    return enforce_reply_size_limit(res_copy, item_keys=["code_chunks", "episodic_history", "symbols", "symbolic_context"])
+    res_str = enforce_reply_size_limit(res_copy, item_keys=["code_chunks", "episodic_history", "symbols", "symbolic_context"])
+    _record_tool_savings("search_knowledge_and_memory", res_str, ctx=ctx, workspace_root=workspace_root, project=project)
+    return res_str
 
 
 # ── Tool 2: Record ─────────────────────────────────────────────────────────
@@ -813,6 +845,7 @@ async def trace_symbol_impact(
     symbols_graph: Optional[str] = None,
     token_budget: Optional[int] = 1500,
     symbol_name: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> str:
     """
     Args:
@@ -822,6 +855,7 @@ async def trace_symbol_impact(
         symbols_graph: Optional FalkorDB graph name (defaults to 'kortext_symbols').
         token_budget:  Optional max tokens for the response (default: 1500).
         symbol_name:   Optional alias for `symbol`.
+        ctx:           Optional FastMCP request context.
     Returns:
         Compact JSON report showing in-budget impacted files, lines, relationships, and progressive summary.
     """
@@ -835,7 +869,9 @@ async def trace_symbol_impact(
         impact = mgr.trace_symbol_impact(target_symbol, direction=direction, max_depth=max_depth, token_budget=token_budget)
         return json.dumps(impact, separators=(",", ":"))
 
-    return await asyncio.to_thread(_do_trace)
+    res_str = await asyncio.to_thread(_do_trace)
+    _record_tool_savings("trace_symbol_impact", res_str, ctx=ctx)
+    return res_str
 
 
 # ── Tool 8: Anti-Ripgrep Deterministic Symbol Seek ───────────────────────
@@ -852,6 +888,7 @@ async def seek_symbol(
     symbol_name: str,
     detail_level: str = "skeleton",
     file_hint: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> str:
     """
     Args:
@@ -859,6 +896,7 @@ async def seek_symbol(
         detail_level: Progressive detail level: 'skeleton' (signature, docstring, types, stubbed body),
                       'interface' (skeleton + callers, callees, methods), or 'full' (complete implementation).
         file_hint: Optional filename or path substring to disambiguate identical symbols.
+        ctx:       Optional FastMCP request context.
     Returns:
         Structured JSON declaration and immediate call graph.
     """
@@ -872,7 +910,9 @@ async def seek_symbol(
             raw_res = seeker.seek_symbol(symbol_name, file_hint=file_hint)
         return enforce_reply_size_limit(raw_res, item_keys=["matches"])
 
-    return await asyncio.to_thread(_do_seek)
+    res_str = await asyncio.to_thread(_do_seek)
+    _record_tool_savings("seek_symbol", res_str, ctx=ctx)
+    return res_str
 
 
 # ── Tool 9: Task DAG Project Management Engine ───────────────────────────

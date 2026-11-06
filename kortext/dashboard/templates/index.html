@@ -18,7 +18,7 @@
         <img src="/static/img/logo.svg" alt="Kortext Logo" class="w-8 h-8 sm:w-9 sm:h-9 rounded-xl shadow-lg shadow-indigo-500/20 border border-slate-700/60 object-contain hover:scale-105 transition-transform">
         <div>
           <h1 class="font-bold text-base sm:text-lg text-slate-100 tracking-tight flex items-center gap-1.5 sm:gap-2">
-            KORTEXT <span id="kortext-version" class="text-[10px] sm:text-xs bg-emerald-500/20 text-emerald-400 px-1.5 sm:px-2 py-0.5 rounded-full font-mono border border-emerald-500/30">v2.0.0</span>
+            KORTEXT <span id="kortext-version" class="text-[10px] sm:text-xs bg-emerald-500/20 text-emerald-400 px-1.5 sm:px-2 py-0.5 rounded-full font-mono border border-emerald-500/30">v{{ version or "2.0.0" }}</span>
           </h1>
         </div>
       </div>
@@ -1064,7 +1064,7 @@
 
   <!-- Footer -->
   <footer class="border-t border-slate-800/80 py-4 text-center text-xs text-slate-400 font-mono">
-    Kortext Knowledge OS • Local Vector & Graph Substrate
+    kortext
   </footer>
 
   <!-- Application Bootstrap: Clean ES Modules -->

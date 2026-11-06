@@ -35,16 +35,6 @@ export async function loadMemory() {
       return;
     }
 
-    if (data.available === false) {
-      container.innerHTML = `
-        <div class="p-8 text-center space-y-2 font-mono text-xs text-slate-400 bg-slate-900/40 border border-dashed border-slate-800 rounded-xl my-4">
-          <div class="text-amber-400 font-semibold">Memory Inbox listing not enabled on episodic driver.</div>
-          <div class="text-slate-500">AgentNativeEpisodicDriver.list_memories is not yet active.</div>
-        </div>
-      `;
-      return;
-    }
-
     allMemories = data.memories || [];
     if (allMemories.length === 0) {
       renderEmptyState(container, 'nothing indexed yet, run kortext init');

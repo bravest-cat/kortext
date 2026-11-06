@@ -51,7 +51,7 @@ function renderSubstrates(data) {
         isHealthy ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
       }">
         <span class="w-2 h-2 rounded-full ${isHealthy ? 'bg-emerald-400' : 'bg-rose-400'}"></span>
-        ${isHealthy ? 'ONLINE' : 'OFFLINE'} (: ${escapeHtml(String(port))})
+        ${isHealthy ? 'ONLINE' : 'OFFLINE'} (:${escapeHtml(String(port))})
       </span>
     `;
   }

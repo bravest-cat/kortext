@@ -1141,7 +1141,7 @@ class AgentNativeEpisodicDriver:
             fact_rows = self._query(
                 "MATCH (s:Entity)-[r:RELATES_TO]->(t:Entity) "
                 + proj_filter_r
-                + "RETURN r.id, coalesce(r.fact, s.name + ' ' + r.relation + ' ' + t.name), "
+                + "RETURN coalesce(r.id, r.fact_id, ''), coalesce(r.fact, s.name + ' ' + r.relation + ' ' + t.name), "
                 "coalesce(r.project, 'kortext'), coalesce(r.trust_level, 'tool_confirmed'), "
                 "coalesce(r.created_at, r.valid_from, ''), coalesce(r.superseded, false), "
                 "coalesce(r.grounded_symbols, '') "
@@ -1156,7 +1156,7 @@ class AgentNativeEpisodicDriver:
             ep_rows = self._query(
                 "MATCH (e:Episodic) "
                 + proj_filter_e
-                + "RETURN e.name, coalesce(e.content, ''), coalesce(e.project, 'kortext'), "
+                + "RETURN coalesce(e.id, e.name), e.name, coalesce(e.content, ''), coalesce(e.project, 'kortext'), "
                 "coalesce(e.trust_level, 'speculative'), coalesce(e.created_at, ''), "
                 "coalesce(e.superseded, false), coalesce(e.grounded_symbols, '') "
                 "ORDER BY coalesce(e.created_at, '') DESC LIMIT $lim",
@@ -1168,9 +1168,12 @@ class AgentNativeEpisodicDriver:
 
         all_items: List[Dict[str, Any]] = []
         for row in (fact_rows[1] if fact_rows and len(fact_rows) > 1 else []) or []:
+            # r.id may be null on edges created before the id field was added; skip those
+            # the dashboard cannot act on a fact with no id anyway
             fid, fact, proj, trust, created_at, superseded, grounded_str = (list(row) + [None] * 7)[:7]
+            resolved_fid = str(fid or "").strip()
             all_items.append({
-                "id": str(fid or ""),
+                "id": resolved_fid,
                 "kind": "fact",
                 "text": str(fact or ""),
                 "project": str(proj or "kortext"),
@@ -1181,9 +1184,10 @@ class AgentNativeEpisodicDriver:
             })
 
         for row in (ep_rows[1] if ep_rows and len(ep_rows) > 1 else []) or []:
-            name, content, proj, trust, created_at, superseded, grounded_str = (list(row) + [None] * 7)[:7]
+            # column 0: coalesce(e.id, e.name) -- prefer e.id when it exists on the node
+            ep_id, ep_name, content, proj, trust, created_at, superseded, grounded_str = (list(row) + [None] * 8)[:8]
             all_items.append({
-                "id": str(name or ""),
+                "id": str(ep_id or ep_name or ""),
                 "kind": "episode",
                 "text": str(content or ""),
                 "project": str(proj or "kortext"),
@@ -1276,27 +1280,44 @@ class AgentNativeEpisodicDriver:
         except Exception as exc:
             logger.debug("Embedding cache write skipped for %s: %s", key, exc)
 
-    async def delete_fact(self, fact_id: str, reason: str, match_substring: bool = False) -> None:
+    async def delete_fact(self, fact_id: str, reason: str, match_substring: bool = False, exact: bool = False) -> None:
         """
         Marks an episodic node or fact relation as superseded.
-        Requires >=12 chars (or match_substring=True) before falling back to substring matching
-        so short generic words never mass-purge the graph.
+
+        When exact=True, only matches e.id = $id OR e.name = $id (and r.id = $id OR r.fact_id = $id).
+        No substring or source_session matching occurs, so superseding one episode cannot
+        accidentally hit another whose name contains the first as a substring.
+
+        When exact=False (default), falls back to substring matching when the id has 12 or more
+        characters or match_substring=True, so short generic words never mass-purge the graph.
         """
         now = datetime.now(timezone.utc).isoformat()
         resolved_id = (fact_id or "").strip()
-        allow_sub = bool(match_substring or len(resolved_id) >= 12)
 
-        self._query(
-            "MATCH (e:Episodic) WHERE e.id = $id OR e.name = $id OR ($allow_sub AND e.name CONTAINS $id) "
-            "SET e.superseded = true, e.superseded_reason = $reason, e.superseded_at = $now",
-            {"id": resolved_id, "reason": reason, "now": now, "allow_sub": allow_sub},
-        )
-        self._query(
-            "MATCH ()-[r:RELATES_TO]->() WHERE r.id = $id OR r.fact_id = $id OR r.source_session = $id "
-            "OR ($allow_sub AND r.fact CONTAINS $id) "
-            "SET r.superseded = true, r.dormant = true, r.superseded_reason = $reason, r.superseded_at = $now",
-            {"id": resolved_id, "reason": reason, "now": now, "allow_sub": allow_sub},
-        )
+        if exact:
+            self._query(
+                "MATCH (e:Episodic) WHERE e.id = $id OR e.name = $id "
+                "SET e.superseded = true, e.superseded_reason = $reason, e.superseded_at = $now",
+                {"id": resolved_id, "reason": reason, "now": now},
+            )
+            self._query(
+                "MATCH ()-[r:RELATES_TO]->() WHERE r.id = $id OR r.fact_id = $id "
+                "SET r.superseded = true, r.dormant = true, r.superseded_reason = $reason, r.superseded_at = $now",
+                {"id": resolved_id, "reason": reason, "now": now},
+            )
+        else:
+            allow_sub = bool(match_substring or len(resolved_id) >= 12)
+            self._query(
+                "MATCH (e:Episodic) WHERE e.id = $id OR e.name = $id OR ($allow_sub AND e.name CONTAINS $id) "
+                "SET e.superseded = true, e.superseded_reason = $reason, e.superseded_at = $now",
+                {"id": resolved_id, "reason": reason, "now": now, "allow_sub": allow_sub},
+            )
+            self._query(
+                "MATCH ()-[r:RELATES_TO]->() WHERE r.id = $id OR r.fact_id = $id OR r.source_session = $id "
+                "OR ($allow_sub AND r.fact CONTAINS $id) "
+                "SET r.superseded = true, r.dormant = true, r.superseded_reason = $reason, r.superseded_at = $now",
+                {"id": resolved_id, "reason": reason, "now": now, "allow_sub": allow_sub},
+            )
 
     async def close(self) -> None:
         """Close FalkorDB connection."""
