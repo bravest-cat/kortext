@@ -6,7 +6,7 @@
 import { state } from './state.js';
 import * as api from './api.js';
 import { formatEdgesNonOverlapping } from './graph.js';
-import { toast, escapeHtml, createVisTooltip } from './ui.js';
+import { toast, escapeHtml, createVisTooltip, renderErrorState, renderEmptyState } from './ui.js';
 
 function safeDomId(val) {
   return encodeURIComponent(String(val || '')).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -86,7 +86,7 @@ export async function executeBlastAnalysis() {
     renderBlastGraph(data.nodes || [], data.edges || []);
     renderBlastTree(data.tree || []);
   } catch (err) {
-    if (treeContainer) treeContainer.innerHTML = `<div class="p-3 text-rose-400 text-xs font-mono">Error: ${escapeHtml(err.message)}</div>`;
+    if (treeContainer) renderErrorState(treeContainer, err.message, executeBlastAnalysis);
     toast('Blast analysis failed: ' + err.message, 'error');
   }
 }

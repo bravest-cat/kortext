@@ -5,7 +5,7 @@
 
 import { state } from './state.js';
 import * as api from './api.js';
-import { toast, escapeHtml } from './ui.js';
+import { toast, escapeHtml, renderErrorState, renderEmptyState } from './ui.js';
 
 export async function loadHealth() {
   try {
@@ -232,12 +232,12 @@ export async function loadCollections() {
   try {
     const data = await api.getCollections();
     if (data.status !== 'ok' || !data.collections) {
-      if (container) container.innerHTML = `<div class="text-rose-400 col-span-3 text-xs font-mono">Failed: ${data.message || 'Error'}</div>`;
+      if (container) renderErrorState(container, data.message || 'Error fetching collections', loadCollections);
       return;
     }
     if (container) {
       if (data.collections.length === 0) {
-        container.innerHTML = '<div class="text-slate-400 py-4 col-span-3 text-center text-xs font-mono">No active collections found.</div>';
+        renderEmptyState(container, 'nothing indexed yet, run kortext init');
         return;
       }
       container.innerHTML = data.collections.map(c => {
@@ -261,7 +261,7 @@ export async function loadCollections() {
       }).join('');
     }
   } catch (err) {
-    if (container) container.innerHTML = `<div class="text-rose-400 col-span-3 text-xs font-mono">Error: ${err.message}</div>`;
+    if (container) renderErrorState(container, err.message, loadCollections);
   }
 }
 

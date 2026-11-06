@@ -112,3 +112,33 @@ export const runDream = (project = 'kortext', purgeStale = false) =>
 // 10. Grounded invariants and context telemetry
 export const getGroundedInvariants = () => fetchJson('/api/invariants/grounded');
 export const getContextTelemetry = () => fetchJson('/api/context/telemetry');
+
+// 11. Overview & Token Savings
+export const getOverview = () => fetchJson('/api/overview');
+export const getSavings = () => fetchJson('/api/savings');
+
+// 12. Memory Inbox
+export const getMemories = (project = null, limit = 200, offset = 0) => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (project && project !== 'all') params.append('project', project);
+  return fetchJson(`/api/memory?${params.toString()}`);
+};
+export const approveMemory = (id, kind = 'fact') =>
+  fetchJson('/api/memory/approve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, kind }),
+  });
+export const editMemory = (id, text, kind = 'fact') =>
+  fetchJson('/api/memory/edit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, text, kind }),
+  });
+export const supersedeMemory = (id, reason, supersededBy = null) =>
+  fetchJson('/api/memory/supersede', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, reason, superseded_by: supersededBy }),
+  });
+

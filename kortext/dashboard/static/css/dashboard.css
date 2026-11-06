@@ -1,3 +1,9 @@
+/* Global responsive reset to prevent mobile horizontal page overflow */
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 /* Premium Futuristic Cyber Graph Canvas */
 .cyber-canvas {
   width: 100%;

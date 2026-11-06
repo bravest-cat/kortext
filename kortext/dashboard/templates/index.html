@@ -4,42 +4,29 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Kortext v2.0.0 - Local AI Memory & Observability</title>
-  <script src="/static/vendor/tailwindcss.js"></script>
   <script src="/static/vendor/vis-network.min.js"></script>
-  <script src="/static/vendor/lucide.min.js"></script>
   <link rel="icon" type="image/svg+xml" href="/static/img/logo.svg">
+  <link rel="stylesheet" href="/static/css/tailwind.css">
   <link rel="stylesheet" href="/static/css/dashboard.css">
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            brand: { 50: '#eef2ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' }
-          }
-        }
-      }
-    }
-  </script>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-indigo-500 selection:text-white overflow-x-hidden">
 
   <!-- Header -->
   <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-      <div class="flex items-center space-x-3 shrink-0">
-        <img src="/static/img/logo.svg" alt="Kortext Logo" class="w-9 h-9 rounded-xl shadow-lg shadow-indigo-500/20 border border-slate-700/60 object-contain hover:scale-105 transition-transform">
+    <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4 min-w-0">
+      <div class="flex items-center space-x-2 sm:space-x-3 shrink-0">
+        <img src="/static/img/logo.svg" alt="Kortext Logo" class="w-8 h-8 sm:w-9 sm:h-9 rounded-xl shadow-lg shadow-indigo-500/20 border border-slate-700/60 object-contain hover:scale-105 transition-transform">
         <div>
-          <h1 class="font-bold text-lg text-slate-100 tracking-tight flex items-center gap-2">
-            KORTEXT <span id="kortext-version" class="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-mono border border-emerald-500/30">v2.0.0</span>
+          <h1 class="font-bold text-base sm:text-lg text-slate-100 tracking-tight flex items-center gap-1.5 sm:gap-2">
+            KORTEXT <span id="kortext-version" class="text-[10px] sm:text-xs bg-emerald-500/20 text-emerald-400 px-1.5 sm:px-2 py-0.5 rounded-full font-mono border border-emerald-500/30">v2.0.0</span>
           </h1>
         </div>
       </div>
 
       <!-- Center: Active Project Filter Selector -->
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-1.5 sm:gap-2 min-w-0">
         <span class="text-xs text-slate-400 font-mono hidden sm:inline">Scope:</span>
-        <select id="select-active-project" onchange="setActiveProject(this.value)" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-indigo-300 font-mono font-medium focus:outline-none focus:border-indigo-500 cursor-pointer">
+        <select id="select-active-project" onchange="setActiveProject(this.value)" class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-indigo-300 font-mono font-medium focus:outline-none focus:border-indigo-500 cursor-pointer max-w-[130px] sm:max-w-none truncate">
           <option value="all">🌐 All Projects</option>
           <option value="kortext" selected>📁 Project: kortext</option>
         </select>
@@ -52,35 +39,41 @@
         <span id="pill-falkordb" class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">FalkorDB ...</span>
         <span id="pill-inference" class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">Inference ...</span>
         <span id="pill-watcher" class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">Watcher ...</span>
-        <button onclick="refreshAll()" class="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition" title="Refresh All Data">
+        <button onclick="refreshAll()" class="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer" title="Refresh All Data">
           <i data-lucide="refresh-cw" class="w-4 h-4"></i>
         </button>
       </div>
     </div>
   </header>
 
-  <!-- Navigation Tabs (Reorganized & Cleanly Named) -->
-  <nav class="border-b border-slate-800 bg-slate-900/50">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-6 overflow-x-auto">
-      <button onclick="setTab('graph')" id="tab-btn-graph" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-indigo-500 text-indigo-400 flex items-center gap-2 whitespace-nowrap">
+  <!-- Navigation Tabs: Real Accessible Tablist with Arrow-Key Navigation & Visual Focus -->
+  <nav class="border-b border-slate-800 bg-slate-900/50" aria-label="Dashboard Navigation">
+    <div id="main-tablist" role="tablist" aria-label="Dashboard Tabs" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-6 overflow-x-auto">
+      <button role="tab" id="tab-btn-overview" aria-controls="tab-content-overview" aria-selected="true" tabindex="0" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-indigo-500 text-indigo-400 flex items-center gap-2 whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-t cursor-pointer">
+        <i data-lucide="layout-dashboard" class="w-4 h-4"></i> Overview
+      </button>
+      <button role="tab" id="tab-btn-graph" aria-controls="tab-content-graph" aria-selected="false" tabindex="-1" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-t cursor-pointer">
         <i data-lucide="share-2" class="w-4 h-4"></i> Graph Explorer
       </button>
-      <button onclick="setTab('tasks')" id="tab-btn-tasks" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap">
+      <button role="tab" id="tab-btn-tasks" aria-controls="tab-content-tasks" aria-selected="false" tabindex="-1" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-t cursor-pointer">
         <i data-lucide="kanban" class="w-4 h-4 text-emerald-400"></i> Task Board
       </button>
-      <button onclick="setTab('blast')" id="tab-btn-blast" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap">
+      <button role="tab" id="tab-btn-blast" aria-controls="tab-content-blast" aria-selected="false" tabindex="-1" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-t cursor-pointer">
         <i data-lucide="crosshair" class="w-4 h-4 text-rose-400"></i> Impact Analysis
       </button>
-      <button onclick="setTab('journal')" id="tab-btn-journal" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap">
+      <button role="tab" id="tab-btn-journal" aria-controls="tab-content-journal" aria-selected="false" tabindex="-1" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-t cursor-pointer">
         <i data-lucide="book-open" class="w-4 h-4 text-amber-400"></i> Decision Journal
       </button>
-      <button onclick="setTab('retrieval')" id="tab-btn-retrieval" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap">
+      <button role="tab" id="tab-btn-memory" aria-controls="tab-content-memory" aria-selected="false" tabindex="-1" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-t cursor-pointer">
+        <i data-lucide="inbox" class="w-4 h-4 text-violet-400"></i> Memory Inbox
+      </button>
+      <button role="tab" id="tab-btn-retrieval" aria-controls="tab-content-retrieval" aria-selected="false" tabindex="-1" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-t cursor-pointer">
         <i data-lucide="search" class="w-4 h-4 text-sky-400"></i> Search & Memory
       </button>
-      <button onclick="setTab('collections')" id="tab-btn-collections" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap">
+      <button role="tab" id="tab-btn-collections" aria-controls="tab-content-collections" aria-selected="false" tabindex="-1" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-t cursor-pointer">
         <i data-lucide="database" class="w-4 h-4 text-purple-400"></i> Vector Store
       </button>
-      <button onclick="setTab('health')" id="tab-btn-health" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap">
+      <button role="tab" id="tab-btn-health" aria-controls="tab-content-health" aria-selected="false" tabindex="-1" class="tab-btn py-3.5 px-2 border-b-2 font-medium text-sm border-transparent text-slate-400 hover:text-slate-200 flex items-center gap-2 whitespace-nowrap focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-t cursor-pointer">
         <i data-lucide="activity" class="w-4 h-4 text-teal-400"></i> System Health
       </button>
     </div>
@@ -89,23 +82,115 @@
   <!-- Main Content -->
   <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
-    <!-- 1. Graph Explorer Tab -->
-    <div id="tab-content-graph" class="tab-content space-y-4">
+    <!-- 0. Overview Tab (Landing Tab) -->
+    <div id="tab-content-overview" role="tabpanel" aria-labelledby="tab-btn-overview" class="tab-content space-y-6">
       <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-semibold text-white tracking-tight flex items-center gap-2">
+            <i data-lucide="layout-dashboard" class="w-5 h-5 text-indigo-400"></i>
+            System Overview & Freshness
+          </h2>
+          <p class="text-sm text-slate-400">Live substrate state, re-index diagnostics, and codebase freshness across monitored projects.</p>
+        </div>
+        <button onclick="loadOverview()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer self-start md:self-auto">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Refresh Overview
+        </button>
+      </div>
+
+      <!-- Grid 1: Substrates & Service Status -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-mono text-slate-400 uppercase">Daemon State</span>
+            <span id="overview-daemon-status"><span class="text-xs text-slate-500 font-mono">Checking...</span></span>
+          </div>
+          <p class="text-xs text-slate-300">FastMCP background service owning vector stores & task automation.</p>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-mono text-slate-400 uppercase">FalkorDB Graph</span>
+            <span id="overview-falkordb-status"><span class="text-xs text-slate-500 font-mono">Checking...</span></span>
+          </div>
+          <p class="text-xs text-slate-300">AST symbol call hierarchy, temporal causality & episodic memory.</p>
+        </div>
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-mono text-slate-400 uppercase">Qdrant Vectors</span>
+            <span id="overview-qdrant-status"><span class="text-xs text-slate-500 font-mono">Checking...</span></span>
+          </div>
+          <p class="text-xs text-slate-300">Hybrid dense + sparse BM25 code snippet vectors.</p>
+        </div>
+      </div>
+
+      <!-- Token Savings Panel (from GET /api/savings; hidden if 404/error) -->
+      <div id="overview-savings-panel" class="hidden bg-gradient-to-r from-indigo-950/40 via-purple-950/30 to-slate-900 border border-indigo-500/30 rounded-xl p-4 space-y-2">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i data-lucide="zap" class="w-4 h-4 text-amber-400"></i>
+            <h3 class="text-sm font-semibold text-white">Estimated Token Savings</h3>
+          </div>
+          <span class="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30">Upper Bound</span>
+        </div>
+        <div class="flex flex-col sm:flex-row sm:items-baseline gap-4 pt-1 font-mono text-xs">
+          <div>
+            <span class="text-slate-400">Total Saved: </span>
+            <span id="overview-savings-estimate" class="text-lg font-bold text-emerald-400 font-sans">0 tokens</span>
+          </div>
+          <div id="overview-savings-counts" class="flex flex-wrap items-center gap-3 text-xs"></div>
+        </div>
+      </div>
+
+      <!-- Two-Column Section: Re-index Diagnostics & Project Freshness -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 min-w-0">
+        <!-- Re-index Queue Card -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5 space-y-4 min-w-0 overflow-hidden">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+            <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+              <i data-lucide="layers" class="w-4 h-4 text-emerald-400"></i>
+              Re-Index Queue & Dead-Letter Log
+            </h3>
+            <span id="overview-reindex-summary" class="text-xs font-mono text-slate-400">0 pending, 0 failed</span>
+          </div>
+          <div id="overview-reindex-failures" class="space-y-2 max-h-60 overflow-y-auto pr-1">
+            <div class="text-xs text-slate-400 font-mono py-2">Loading re-index diagnostics...</div>
+          </div>
+        </div>
+
+        <!-- Project Index Freshness Card -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5 space-y-4 min-w-0 overflow-hidden">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+            <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+              <i data-lucide="folder" class="w-4 h-4 text-sky-400"></i>
+              Project Index Freshness
+            </h3>
+            <span class="text-xs font-mono text-slate-400">Monitored Repos</span>
+          </div>
+          <div id="overview-projects-list">
+            <div class="text-xs text-slate-400 font-mono py-2">Loading index freshness...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1. Graph Explorer Tab -->
+    <div id="tab-content-graph" role="tabpanel" aria-labelledby="tab-btn-graph" class="tab-content space-y-4 hidden min-w-0">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 min-w-0">
         <div>
           <h2 class="text-lg font-semibold text-white">Knowledge Graph Explorer</h2>
           <p class="text-sm text-slate-400">Interactive property graph visualization for code symbols, relationships, and episodic memory.</p>
         </div>
-        <div class="flex flex-wrap items-center gap-2.5">
+        <div class="flex flex-wrap items-center gap-2 sm:gap-2.5 min-w-0">
           <!-- Graph Source Selector -->
-          <select id="select-graph-type" onchange="loadGraph()" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono">
+          <select id="select-graph-type" onchange="loadGraph()" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono max-w-[200px] truncate sm:max-w-none">
             <option value="episodic">Episodic Memory (kortext)</option>
             <option value="symbols">Symbol & Reference Graph (kortext_symbols)</option>
           </select>
 
           <!-- Graph Search Filter -->
           <div class="relative">
-            <input type="text" id="graph-search" oninput="filterGraphBySearch()" placeholder="Search node & focus..." class="bg-slate-900 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 w-44">
+            <input type="text" id="graph-search" oninput="filterGraphBySearch()" placeholder="Search node & focus..." class="bg-slate-900 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 w-36 sm:w-44">
             <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5"></i>
           </div>
 
@@ -619,6 +704,56 @@
       </div>
     </div>
 
+    <!-- Memory Inbox Tab -->
+    <div id="tab-content-memory" role="tabpanel" aria-labelledby="tab-btn-memory" class="tab-content space-y-4 hidden">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-semibold text-white tracking-tight flex items-center gap-2">
+            <i data-lucide="inbox" class="w-5 h-5 text-violet-400"></i>
+            Memory Inbox
+          </h2>
+          <p class="text-sm text-slate-400">Review, approve, edit, and supersede what Kortext remembered across engineering sessions.</p>
+        </div>
+        <button onclick="loadMemory()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer self-start md:self-auto">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Refresh Memories
+        </button>
+      </div>
+
+      <!-- Filter Controls Toolbar -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="flex items-center gap-1.5">
+            <span class="text-slate-400">Kind:</span>
+            <select id="memory-filter-kind" onchange="applyMemoryFilters()" class="bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer">
+              <option value="all">All</option>
+              <option value="fact">Fact</option>
+              <option value="episode">Episode</option>
+            </select>
+          </div>
+
+          <label class="flex items-center gap-1.5 text-slate-300 cursor-pointer select-none">
+            <input type="checkbox" id="memory-filter-stale" onchange="applyMemoryFilters()" class="rounded border-slate-700 text-amber-500 focus:ring-amber-500 bg-slate-950">
+            <span>Stale only</span>
+          </label>
+
+          <label class="flex items-center gap-1.5 text-slate-300 cursor-pointer select-none">
+            <input type="checkbox" id="memory-filter-unverified" onchange="applyMemoryFilters()" class="rounded border-slate-700 text-rose-500 focus:ring-rose-500 bg-slate-950">
+            <span>Unverified only</span>
+          </label>
+        </div>
+
+        <div class="relative w-full sm:w-64">
+          <input type="text" id="memory-search-input" oninput="applyMemoryFilters()" placeholder="Filter by text or ID..." class="w-full bg-slate-950 border border-slate-700 rounded-lg pl-8 pr-3 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+          <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2"></i>
+        </div>
+      </div>
+
+      <!-- Memory cards container -->
+      <div id="memory-list-container" class="space-y-3">
+        <div class="text-slate-400 py-12 text-center text-xs font-mono">Loading memories...</div>
+      </div>
+    </div>
+
     <!-- 5. Search & Memory Tab -->
     <div id="tab-content-retrieval" class="tab-content hidden space-y-4">
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -1046,6 +1181,54 @@
       </div>
       <div class="flex justify-end pt-2 border-t border-slate-800">
         <button onclick="closeModal('modal-markdown-viewer')" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Memory Modal -->
+  <div id="modal-memory-edit" class="hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+        <h3 id="memory-edit-title" class="font-bold text-white text-base truncate pr-4">Edit Memory</h3>
+        <button onclick="closeModal('modal-memory-edit')" class="text-slate-400 hover:text-white p-1">✕</button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-400 font-medium mb-1">Memory Text</label>
+          <textarea id="memory-edit-text" rows="5" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-white focus:outline-none focus:border-indigo-500 font-mono text-xs"></textarea>
+        </div>
+      </div>
+      <div class="flex justify-end gap-3 pt-3 border-t border-slate-800">
+        <button onclick="closeModal('modal-memory-edit')" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium">Cancel</button>
+        <button onclick="submitEditMemory()" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium flex items-center gap-1.5">
+          <i data-lucide="check" class="w-3.5 h-3.5"></i> Save Changes
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Supersede Memory Modal -->
+  <div id="modal-memory-supersede" class="hidden fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+        <h3 id="memory-supersede-title" class="font-bold text-white text-base truncate pr-4">Supersede Memory</h3>
+        <button onclick="closeModal('modal-memory-supersede')" class="text-slate-400 hover:text-white p-1">✕</button>
+      </div>
+      <div class="space-y-3 text-xs font-mono">
+        <div>
+          <label class="block text-slate-400 font-medium mb-1">Reason for Superseding (Required)</label>
+          <input type="text" id="memory-supersede-reason" placeholder="e.g. Outdated after API migration in PR #12" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-rose-500 text-xs">
+        </div>
+        <div>
+          <label class="block text-slate-400 font-medium mb-1">Superseded By (Optional Memory or Fact ID)</label>
+          <input type="text" id="memory-supersede-by" placeholder="e.g. fact_987" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-indigo-500 text-xs">
+        </div>
+      </div>
+      <div class="flex justify-end gap-3 pt-3 border-t border-slate-800">
+        <button onclick="closeModal('modal-memory-supersede')" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium">Cancel</button>
+        <button onclick="submitSupersedeMemory()" class="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium flex items-center gap-1.5">
+          <i data-lucide="archive" class="w-3.5 h-3.5"></i> Supersede
+        </button>
       </div>
     </div>
   </div>

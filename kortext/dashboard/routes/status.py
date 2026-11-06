@@ -58,6 +58,109 @@ async def get_status():
     return await audit_kortext_health(include_browser_ui=True, include_invariants=False)
 
 
+@router.get("/api/overview")
+async def get_overview():
+    """
+    Consolidated telemetry for the Overview tab:
+    - daemon state
+    - FalkorDB and Qdrant state
+    - re-index queue with failures and their errors
+    - index freshness per project (last indexed time, files, symbols)
+    """
+    from datetime import datetime, timezone
+    from kortext import daemon
+    from kortext.cache import IngestCache
+    from kortext.health import audit_kortext_health, reindex_spool_status
+
+    daemon_up = False
+    try:
+        daemon_up = daemon.is_up(timeout=0.4)
+    except Exception:
+        daemon_up = False
+
+    health_data = {}
+    try:
+        health_data = await audit_kortext_health(include_browser_ui=False, include_invariants=False)
+    except Exception as exc:
+        logger.debug("Overview health check skipped: %s", exc)
+
+    reindex = {"pending": 0, "failed": 0, "recent_failures": []}
+    try:
+        reindex = reindex_spool_status()
+    except Exception as exc:
+        logger.debug("Overview reindex status failed: %s", exc)
+
+    projects: List[Dict[str, Any]] = []
+    try:
+        cache = IngestCache()
+        with cache._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT collection, count(*) as file_count, max(updated_at) as last_indexed FROM file_cache GROUP BY collection"
+            ).fetchall()
+            for r in rows:
+                col = r["collection"]
+                cnt = r["file_count"]
+                ts = r["last_indexed"]
+                last_indexed_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
+                symbols_count = None
+                try:
+                    fclient = get_shared_falkordb_client(host=FALKORDB_HOST, port=FALKORDB_PORT)
+                    target_graph = f"{col}_symbols" if col != "kortext" else "kortext_symbols"
+                    s_res = fclient.query(target_graph, "MATCH (s:Symbol) RETURN count(s)", read_only=True)
+                    if s_res and len(s_res) > 1 and s_res[1]:
+                        symbols_count = int(s_res[1][0][0])
+                except Exception:
+                    symbols_count = None
+
+                projects.append({
+                    "project": col,
+                    "last_indexed": last_indexed_iso,
+                    "files": cnt,
+                    "symbols": symbols_count,
+                })
+    except Exception as exc:
+        logger.debug("Overview project freshness query failed: %s", exc)
+
+    if not projects:
+        try:
+            fclient = get_shared_falkordb_client(host=FALKORDB_HOST, port=FALKORDB_PORT)
+            s_res = fclient.query("kortext_symbols", "MATCH (s:Symbol) RETURN count(s)", read_only=True)
+            f_res = fclient.query("kortext_symbols", "MATCH (f:File) RETURN count(f)", read_only=True)
+            sym_cnt = int(s_res[1][0][0]) if (s_res and len(s_res) > 1 and s_res[1]) else 0
+            file_cnt = int(f_res[1][0][0]) if (f_res and len(f_res) > 1 and f_res[1]) else 0
+            if sym_cnt > 0 or file_cnt > 0:
+                projects.append({
+                    "project": "kortext",
+                    "last_indexed": None,
+                    "files": file_cnt,
+                    "symbols": sym_cnt,
+                })
+        except Exception:
+            pass
+
+    falkor_service = next((s for s in health_data.get("services", []) if "FalkorDB" in s.get("name", "")), None)
+    qdrant_service = next((s for s in health_data.get("services", []) if "Qdrant" in s.get("name", "")), None)
+
+    return {
+        "status": "ok",
+        "daemon": {
+            "status": "RUNNING" if daemon_up else "STOPPED",
+            "healthy": daemon_up,
+        },
+        "falkordb": {
+            "status": falkor_service.get("status") if falkor_service else ("RUNNING" if _check_tcp(FALKORDB_HOST, FALKORDB_PORT) else "OFFLINE"),
+            "healthy": falkor_service.get("healthy", False) if falkor_service else _check_tcp(FALKORDB_HOST, FALKORDB_PORT),
+            "port": FALKORDB_PORT,
+        },
+        "qdrant": {
+            "status": qdrant_service.get("status") if qdrant_service else "OFFLINE",
+            "healthy": qdrant_service.get("healthy", False) if qdrant_service else False,
+        },
+        "reindex": reindex,
+        "projects": projects,
+    }
+
+
 @router.get("/api/collections")
 async def list_collections():
     """List Qdrant collections with point counts and configs."""
