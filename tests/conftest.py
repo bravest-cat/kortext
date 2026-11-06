@@ -59,19 +59,8 @@ _SEED_SYMBOLS_DATA: List[Dict[str, Any]] = [
         "end_line": 145,
         "signature": "class RetrievalEngine:",
         "docstring": "Orchestrates 5-Signal Hybrid RRF retrieval.",
-        "callees": ["apply_taak_trimming", "rank_candidates_rrf", "SymbolSeekEngine", "HippoRAGPPR"],
+        "callees": ["rank_candidates_rrf", "SymbolSeekEngine"],
         "callers": ["execute_federated_query", "search_knowledge_and_memory"],
-    },
-    {
-        "name": "apply_taak_trimming",
-        "kind": "function",
-        "file_path": "kortext/retrieval/knee_trimmer.py",
-        "line": 45,
-        "end_line": 70,
-        "signature": "def apply_taak_trimming(ranked_candidates: List[Any], k_min: int = 3, k_max: int = 15) -> List[str]:",
-        "docstring": "Truncation-Aware Adaptive Knee trimming.",
-        "callees": ["extract_passage_text"],
-        "callers": ["RetrievalEngine"],
     },
     {
         "name": "SymbolSeekEngine",
@@ -94,29 +83,6 @@ _SEED_SYMBOLS_DATA: List[Dict[str, Any]] = [
         "docstring": "Extracts likely symbol identifiers from a natural language query.",
         "callees": [],
         "callers": ["SymbolSeekEngine", "RetrievalEngine"],
-    },
-    {
-        "name": "HippoRAGPPR",
-        "kind": "class",
-        "file_path": "kortext/retrieval/hipporag.py",
-        "line": 22,
-        "end_line": 42,
-        "signature": "class HippoRAGPPR:",
-        "docstring": "Executes Personalized PageRank with Inverse Degree Specificity.",
-        "callees": ["retrieve_associative_subgraph", "get_shared_falkordb_client"],
-        "callers": ["RetrievalEngine"],
-    },
-    {
-        "name": "retrieve_associative_subgraph",
-        "kind": "method",
-        "file_path": "kortext/retrieval/hipporag.py",
-        "line": 38,
-        "end_line": 65,
-        "signature": "def retrieve_associative_subgraph(self, seed_entities: List[str], top_k: int = 15) -> List[Tuple[str, float]]:",
-        "docstring": "Runs single-pass Personalized PageRank starting from seed entities.",
-        "parent": "HippoRAGPPR",
-        "callees": ["get_shared_falkordb_client"],
-        "callers": ["HippoRAGPPR", "RetrievalEngine"],
     },
     {
         "name": "AgentNativeEpisodicDriver",
@@ -373,7 +339,7 @@ _SEED_SYMBOLS_DATA: List[Dict[str, Any]] = [
         "signature": "def get_shared_falkordb_client() -> FalkorDBClient:",
         "docstring": "Returns thread-safe singleton FalkorDBClient instance via Unix socket.",
         "callees": ["FalkorDBClient"],
-        "callers": ["SymbolSeekEngine", "SymbolGraphManager", "HippoRAGPPR", "TaskDAGTracker"],
+        "callers": ["SymbolSeekEngine", "SymbolGraphManager", "TaskDAGTracker"],
     },
     {
         "name": "FalkorDBClient",
@@ -385,17 +351,6 @@ _SEED_SYMBOLS_DATA: List[Dict[str, Any]] = [
         "docstring": "Canonical FalkorDB Redis client with thread-safe connection pooling.",
         "callees": ["get_shared_falkordb_client"],
         "callers": ["get_shared_falkordb_client"],
-    },
-    {
-        "name": "compute_weibull_retention",
-        "kind": "function",
-        "file_path": "kortext/retrieval/retention.py",
-        "line": 20,
-        "end_line": 50,
-        "signature": "def compute_weibull_retention(delta_hours: float = 0.0, importance: int = 5) -> float:",
-        "docstring": "Computes Stretched Weibull memory retention score with biological floor.",
-        "callees": [],
-        "callers": ["rank_candidates_rrf", "AgentNativeEpisodicDriver"],
     },
     {
         "name": "main",
@@ -660,32 +615,6 @@ def _sandbox_falkordb_fixture_query(
             ["symbol", "kind", "file", "line", "end_line", "signature", "docstring", "callers", "callees"],
             rows,
         ]
-
-    # HippoRAGPPR.retrieve_associative_subgraph
-    if "WHERE (seed:Entity OR seed:Symbol OR seed:File) AND (seed.name IN $seeds" in q:
-        seeds = set(params.get("seeds") or [])
-        ppr_rows: List[List[Any]] = []
-        hop1_neighbors: Set[str] = set()
-        for c in calls:
-            if c["caller"] in seeds:
-                ppr_rows.append([c["caller"], c["symbol"], 1.0])
-                hop1_neighbors.add(c["symbol"])
-            if c["symbol"] in seeds:
-                ppr_rows.append([c["symbol"], c["caller"], 1.0])
-                hop1_neighbors.add(c["caller"])
-        for n1 in list(hop1_neighbors):
-            for c in calls:
-                if c["caller"] == n1 and c["symbol"] not in seeds:
-                    ppr_rows.append([n1, c["symbol"], 0.6])
-                elif c["symbol"] == n1 and c["caller"] not in seeds:
-                    ppr_rows.append([n1, c["caller"], 0.6])
-        for e in edges:
-            if not e.get("dormant") and not e.get("superseded"):
-                if e.get("sub") in seeds:
-                    ppr_rows.append([e["sub"], e["obj"], 0.8])
-                if e.get("obj") in seeds:
-                    ppr_rows.append([e["obj"], e["sub"], 0.8])
-        return [["source", "target", "weight"], ppr_rows]
 
     # SymbolGraphManager.trace_symbol_impact
     if "MATCH (f:File)-[r:REFERENCES|IMPORTS]->(s:Symbol)" in q:
