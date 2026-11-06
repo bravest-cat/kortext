@@ -579,6 +579,69 @@ class PromptSecretInterceptor:
         return InterceptorResult.allow()
 
 
+class MemoryIndexLoader:
+    """
+    Loads and injects INDEX.md on Turn 0, capped at ~400 tokens (~1600 chars).
+    Silent when absent or when KORTEXT_LOAD_MEMORY_INDEX=0.
+    Enforces MINJA CausalSanitizer security check and provenance fencing.
+    """
+
+    def process(self, context: HookContext) -> InterceptorResult:
+        if not context.is_first_turn:
+            return InterceptorResult.allow()
+
+        if os.getenv("KORTEXT_LOAD_MEMORY_INDEX", "1").strip() == "0":
+            return InterceptorResult.allow()
+
+        from kortext.trust.sanitizer import CausalSanitizer, SecurityViolation, fence_memory_by_provenance
+        from kortext.vault import resolve_memory_dir
+
+        ws = getattr(context, "cwd", None)
+        if not ws:
+            wps = getattr(context, "workspace_paths", ())
+            ws = wps[0] if wps else None
+
+        proj = getattr(context, "workspace_project", None)
+        memory_dir = resolve_memory_dir(workspace_root=ws, project=proj)
+        index_file = memory_dir / "INDEX.md"
+
+        if not index_file.is_file():
+            return InterceptorResult.allow()
+
+        try:
+            content = index_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            return InterceptorResult.allow()
+
+        if not content:
+            return InterceptorResult.allow()
+
+        # Security check: must pass CausalSanitizer
+        sanitizer = CausalSanitizer()
+        try:
+            sanitizer.sanitize(
+                subject="INDEX.md",
+                relation="CONTEXT",
+                fact=content,
+                source_tier=3,
+                trust_level="speculative",
+            )
+        except SecurityViolation as sv:
+            logger.warning("INDEX.md blocked by CausalSanitizer: %s", sv)
+            return InterceptorResult.allow()
+
+        # Token cap at ~400 tokens (~1600 characters)
+        capped_content = content[:1600]
+
+        # Fence as unverified data
+        fenced = fence_memory_by_provenance(capped_content, trust_level="speculative", source_tier=3)
+
+        inject_steps = ({"ephemeralMessage": fenced},)
+        return InterceptorResult.allow(
+            data=MappingProxyType({"injectSteps": inject_steps})
+        )
+
+
 class PreInvokePipeline:
     """
     Dispatches PreInvocation interceptors and consolidates any injected ephemeralMessage steps.
@@ -598,6 +661,8 @@ class PreInvokePipeline:
             ]
             if os.getenv("KORTEXT_INJECT_INVARIANTS", "0") == "1":
                 default_list.append(InvariantInjector())
+            if os.getenv("KORTEXT_LOAD_MEMORY_INDEX", "1").strip() != "0":
+                default_list.append(MemoryIndexLoader())
             self.interceptors = tuple(default_list)
 
     def execute(self, context: HookContext) -> InterceptorResult:

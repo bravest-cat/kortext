@@ -9,10 +9,11 @@ from typing import Optional
 
 from fastapi import APIRouter
 
+from kortext.vault import resolve_memory_dir
+
 router = APIRouter(tags=["journal"])
 
-KORTEXT_ROOT = Path(__file__).resolve().parents[3]
-JOURNAL_DIR = Path(os.getenv("JOURNAL_DIR", str(KORTEXT_ROOT / "journal")))
+JOURNAL_DIR = resolve_memory_dir()
 
 
 VALID_CATEGORIES = frozenset({
@@ -126,18 +127,19 @@ def _extract_category(body: str, folder_hint: Optional[str] = None, title_hint: 
 
 
 @router.get("/api/journal")
-async def get_journal():
+async def get_journal(workspace_root: Optional[str] = None, project: Optional[str] = None):
     """Parses all journal files and returns chronological entries with categories."""
-    if not JOURNAL_DIR.is_dir():
+    target_dir = resolve_memory_dir(workspace_root=workspace_root, project=project) if (workspace_root or project) else JOURNAL_DIR
+    if not target_dir.is_dir():
         return {"entries": []}
 
     entries = []
     seen_keys = set()
 
     # 1. Parse daily markdown journals (e.g. journal/2026-10-10.md)
-    daily_files = sorted(JOURNAL_DIR.glob("*.md"), reverse=True)
+    daily_files = sorted(target_dir.glob("*.md"), reverse=True)
     for f in daily_files:
-        if f.name.startswith(".") or f.stem in ("README", "invariants"):
+        if f.name.startswith(".") or f.stem in ("README", "invariants", "INDEX"):
             continue
         date_str = f.stem
         try:
@@ -179,7 +181,7 @@ async def get_journal():
 
     # 2. Parse dedicated category directories (e.g. journal/decisions/*.md, journal/reports/*.md)
     for folder_name, cat_name in CATEGORY_FOLDER_MAP.items():
-        sub_dir = JOURNAL_DIR / folder_name
+        sub_dir = target_dir / folder_name
         if not sub_dir.is_dir():
             continue
         sub_files = sorted(sub_dir.glob("*.md"), reverse=True)

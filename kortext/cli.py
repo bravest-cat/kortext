@@ -416,6 +416,30 @@ def main():
     p_boost.add_argument("--json", action="store_true", help="Output full JSON payload instead of boosted prompt markdown")
     p_boost.set_defaults(func=cmd_boost)
 
+    # memory
+    def cmd_memory_rebuild(args):
+        from kortext.scripts.sync_journal import sync_journal
+        root_path = Path(args.root).resolve() if args.root else None
+        asyncio.run(sync_journal(root=root_path, dry_run=args.dry_run))
+
+    def cmd_memory_index(args):
+        from kortext.vault import generate_memory_index, resolve_memory_dir
+        root_path = Path(args.root).resolve() if args.root else resolve_memory_dir()
+        idx_path = generate_memory_index(root_path)
+        print(f"Memory index generated: {idx_path}")
+
+    p_memory = subparsers.add_parser("memory", help="Memory vault utilities (rebuild, index)")
+    p_mem_subs = p_memory.add_subparsers(dest="memory_subcommand", required=True)
+
+    p_mem_rebuild = p_mem_subs.add_parser("rebuild", help="Rebuild FalkorDB episodic memory from Markdown journals")
+    p_mem_rebuild.add_argument("--root", default=None, help="Root path of memory vault / journals")
+    p_mem_rebuild.add_argument("--dry-run", action="store_true", help="Inspect entries without persisting to FalkorDB")
+    p_mem_rebuild.set_defaults(func=cmd_memory_rebuild)
+
+    p_mem_index = p_mem_subs.add_parser("index", help="Regenerate INDEX.md in memory vault")
+    p_mem_index.add_argument("--root", default=None, help="Root path of memory vault / journals")
+    p_mem_index.set_defaults(func=cmd_memory_index)
+
     # help
     p_help = subparsers.add_parser("help", help="Show this help message")
     p_help.set_defaults(func=lambda _: parser.print_help())

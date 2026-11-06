@@ -25,7 +25,11 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+import urllib.request
+from urllib.parse import urlparse
+
+import portalocker
 
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
@@ -60,6 +64,7 @@ from kortext.server_helpers import (
 )
 from kortext.symbols.graph import SymbolGraphManager
 from kortext.trust.sanitizer import CausalSanitizer, SecurityViolation
+from kortext.vault import generate_memory_index, resolve_memory_dir
 
 # ── Singletons & Concurrency Guards (shared across tool calls) ─────────────
 
@@ -70,8 +75,7 @@ symbol_graph = SymbolGraphManager()
 _ACTIVE_INDEX_TASKS: set[asyncio.Task[Any]] = set()
 _COLLECTION_INDEX_LOCKS: Dict[str, asyncio.Lock] = {}
 
-JOURNAL_DIR = Path(os.getenv("JOURNAL_DIR", str(KORTEXT_ROOT / "journal")))
-JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+JOURNAL_DIR: Optional[Union[Path, str]] = None
 HANDOFFS_DIR = get_kortext_home() / "handoffs"
 HANDOFFS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -273,9 +277,49 @@ async def search_knowledge_and_memory(
 
 # ── Tool 2: Record ─────────────────────────────────────────────────────────
 
+async def _discover_workspace_root(
+    workspace_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Validates explicit workspace_root or queries MCP client roots via ctx.session.list_roots().
+    Returns (resolved_workspace_root, warning_message).
+    """
+    warning: Optional[str] = None
+    if workspace_root:
+        try:
+            cand = Path(workspace_root).expanduser().resolve()
+            if cand.is_dir():
+                return str(cand), None
+            else:
+                warning = f"Warning: workspace_root '{workspace_root}' is not an existing directory; ignoring."
+        except Exception as e:
+            warning = f"Warning: workspace_root '{workspace_root}' is invalid ({e}); ignoring."
+
+    if ctx is not None:
+        session = getattr(ctx, "session", None)
+        if session and hasattr(session, "list_roots"):
+            try:
+                roots_res = await asyncio.wait_for(session.list_roots(), timeout=2.0)
+                roots_list = getattr(roots_res, "roots", None) or []
+                for r in roots_list:
+                    raw_uri = getattr(r, "uri", None) or (r if isinstance(r, str) else None)
+                    if raw_uri and isinstance(raw_uri, str) and raw_uri.startswith("file://"):
+                        parsed = urlparse(raw_uri)
+                        path_str = urllib.request.url2pathname(parsed.path)
+                        cand = Path(path_str).expanduser().resolve()
+                        if cand.is_dir():
+                            return str(cand), warning
+            except Exception as exc:
+                logger.debug("Client roots discovery failed or timed out: %s", exc)
+
+    return None, warning
+
+
 @mcp.tool(
     description=(
         "Record a significant technical decision, configuration change, or work outcome. "
+        "Agents should pass workspace_root, the absolute path of the current workspace, so memory lands in the project vault. "
         "Persists to: (1) FalkorDB episodic knowledge graph directly without intermediate LLM proxy, "
         "and (2) a dated Markdown journal file for human-readable audit trail. Old conflicting facts "
         "are superseded, not deleted."
@@ -293,6 +337,7 @@ async def record_system_outcome(
     supersedes: Optional[list[str]] = None,
     trust_level: str = "speculative",
     ctx: Optional[Context] = None,
+    workspace_root: Optional[str] = None,
 ) -> str:
     """
     Args:
@@ -306,6 +351,7 @@ async def record_system_outcome(
         supersedes:   Optional list of patterns/facts superseded by this outcome
         trust_level:  Trust anchor level: 'speculative' (0.50), 'tool_confirmed' (0.60), 'verified' (0.80), 'user_approved' (1.00), or 'system' (1.00)
         ctx:          Optional FastMCP request context carrying Antigravity metadata (_meta['antigravity.google/root_conversation_id']).
+        workspace_root: Absolute path of current workspace. Agents should pass this so memory lands in the project vault.
     Returns:
         Confirmation with paths to KG and journal.
     """
@@ -378,12 +424,21 @@ async def record_system_outcome(
     except SecurityViolation as sv:
         return f"🚨 BLOCKED BY MINJA CAUSAL SANITIZER: {sv}. Write operation rejected and quarantined."
 
+    # Discover and validate workspace root
+    valid_ws_root, ws_warning = await _discover_workspace_root(workspace_root=workspace_root, ctx=ctx)
+    workspace_root = valid_ws_root
+
+    if JOURNAL_DIR is not None:
+        target_memory_dir = Path(JOURNAL_DIR).expanduser().resolve()
+    else:
+        target_memory_dir = resolve_memory_dir(workspace_root=workspace_root, project=project)
+
     safe_title = re.sub(r"[^\w\-]+", "_", episode_name.strip().lower()).strip("_") or "outcome"
     today = datetime.now().strftime("%Y-%m-%d")
     now_time = datetime.now().strftime("%H:%M")
 
     cat_dir_name = CATEGORY_DIRS[cat]
-    category_dir = JOURNAL_DIR / cat_dir_name
+    category_dir = target_memory_dir / cat_dir_name
     outcome_file = category_dir / f"{today}_{safe_title}.md"
 
     outcome_lines = [
@@ -400,7 +455,7 @@ async def record_system_outcome(
     outcome_lines.extend(["\n## Outcome Description\n", full_content, "\n"])
     outcome_content = "\n".join(outcome_lines)
 
-    journal_file = JOURNAL_DIR / f"{today}.md"
+    journal_file = target_memory_dir / f"{today}.md"
     entry_lines = [f"\n## {now_time} - {episode_name}\n", full_content]
     entry_lines.append(f"\n**Category:** {cat}")
     if tags:
@@ -417,8 +472,19 @@ async def record_system_outcome(
         category_dir.mkdir(parents=True, exist_ok=True)
         with open(outcome_file, "w", encoding="utf-8") as f:
             f.write(outcome_content)
-        with open(journal_file, "a", encoding="utf-8") as f:
-            f.write("\n".join(entry_lines))
+        lock_file = target_memory_dir / ".journal.lock"
+        try:
+            with portalocker.Lock(str(lock_file), timeout=1.0):
+                with open(journal_file, "a", encoding="utf-8") as f:
+                    f.write("\n".join(entry_lines))
+                try:
+                    generate_memory_index(target_memory_dir, project=project)
+                except Exception as exc:
+                    logger.debug("Failed to generate memory index in record_system_outcome: %s", exc)
+        except portalocker.exceptions.BaseLockException:
+            logger.debug("Daily journal lock timed out in record_system_outcome; appending directly")
+            with open(journal_file, "a", encoding="utf-8") as f:
+                f.write("\n".join(entry_lines))
 
     await asyncio.to_thread(_write_journal)
 
@@ -443,12 +509,15 @@ async def record_system_outcome(
     except Exception as e:
         kg_status = f"⚠️ FalkorDB KG skipped ({type(e).__name__}: {e})"
 
-    return (
+    res_text = (
         f"✅ Recorded: '{episode_name}'\n"
         f"   → Category: {outcome_file}\n"
         f"   → Journal: {journal_file}\n"
         f"   → {kg_status}"
     )
+    if ws_warning:
+        res_text = f"{ws_warning}\n{res_text}"
+    return res_text
 
 
 # ── Tool 3: Dream Mode ─────────────────────────────────────────────────────

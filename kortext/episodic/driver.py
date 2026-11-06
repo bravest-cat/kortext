@@ -245,6 +245,7 @@ class AgentNativeEpisodicDriver:
         supersedes: Optional[List[str]] = None,
         trust_level: str = "speculative",
         category: str = "implementation",
+        date: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Agent-Native recording with Trust Anchor State Machine:
@@ -334,7 +335,7 @@ class AgentNativeEpisodicDriver:
         tags_str = ", ".join(tags) if tags else ""
         self._query(
             "MERGE (e:Episodic {name: $name}) "
-            "SET e.content = $content, e.created_at = $now, e.project = $project, "
+            "SET e.content = $content, e.created_at = $now, e.date = $date, e.project = $project, "
             "e.tags = $tags, e.superseded = false, e.trust_level = $trust_level, "
             "e.trust_score = $trust_score, e.category = $category "
             "MERGE (p:Project {id: $project}) "
@@ -344,6 +345,7 @@ class AgentNativeEpisodicDriver:
                 "name": episode_name,
                 "content": content,
                 "now": now,
+                "date": date or now[:10],
                 "project": proj,
                 "tags": tags_str,
                 "trust_level": norm_level,

@@ -24,6 +24,8 @@ FILE_MODIFYING_TOOLS = frozenset({
     "write_to_file",
     "replace_file_content",
     "multi_replace_file_content",
+    "write_file",
+    "edit_file",
 })
 
 OUTCOME_TOOLS = frozenset({
@@ -72,7 +74,8 @@ def _analyze_transcript_outcomes(context: HookContext) -> Tuple[bool, bool, List
                     modified_files = True
                     if isinstance(args, (dict, MappingProxyType)):
                         tf = (
-                            args.get("TargetFile")
+                            args.get("Path")
+                            or args.get("TargetFile")
                             or args.get("target_file")
                             or args.get("path")
                             or args.get("file_path")
@@ -348,6 +351,13 @@ class OutcomePersistenceGuard:
             return InterceptorResult.allow()
 
         modified_files, recorded_outcome, modified_paths = _analyze_transcript_outcomes(context)
+        if modified_files and modified_paths:
+            try:
+                from kortext.vault import record_session_log
+                record_session_log(context, modified_paths)
+            except Exception as exc:
+                logger.debug("Automatic session log recording skipped: %s", exc)
+
         if not modified_files or recorded_outcome:
             return InterceptorResult.allow()
 
@@ -562,5 +572,17 @@ class StopPipeline:
             except Exception as e:
                 logger.debug("Stop interceptor %s failed: %s", type(interceptor).__name__, e)
                 continue
+
+        try:
+            from kortext.vault import generate_memory_index, resolve_memory_dir
+
+            ws = getattr(context, "cwd", None)
+            if not ws:
+                wps = getattr(context, "workspace_paths", ())
+                ws = wps[0] if wps else None
+            mem_dir = resolve_memory_dir(workspace_root=ws, project=context.workspace_project)
+            generate_memory_index(mem_dir, project=context.workspace_project)
+        except Exception as exc:
+            logger.debug("Suppressed error generating memory index at Stop: %s", exc)
 
         return InterceptorResult.stop(data=MappingProxyType(merged_data))
