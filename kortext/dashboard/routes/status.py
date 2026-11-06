@@ -442,3 +442,12 @@ async def get_telemetry():
             "nextgen_hooks": active_hooks,
         },
     }
+
+
+@router.get("/api/savings")
+async def get_savings(days: int = 30, project: Optional[str] = None):
+    """Token savings telemetry and estimation report."""
+    from kortext.savings import get_savings_summary
+
+    return get_savings_summary(days=days, project=project)
+

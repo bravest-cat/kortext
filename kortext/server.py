@@ -1158,6 +1158,32 @@ async def boost_prompt_context(
     return await asyncio.to_thread(_do_boost)
 
 
+# ── Tool 12: Affected Tests Finder ─────────────────────────────────────
+
+@mcp.tool(
+    description=(
+        "Find tests affected by git changes against base branch or commit using static AST call graph. "
+        "Limit: static call graph only, so dynamic dispatch and fixtures can be missed."
+    ),
+    meta={"antigravity/alwaysLoad": False},
+)
+async def find_affected_tests(
+    workspace_root: str,
+    base: str = "HEAD",
+) -> str:
+    """
+    Args:
+        workspace_root: Workspace root directory path.
+        base:           Git base commit or branch to diff against (default 'HEAD').
+    Returns:
+        JSON payload with affected test files, test functions, and ready-to-run test command.
+    """
+    from kortext.affected import find_affected_tests as _do_find
+
+    res = await asyncio.to_thread(_do_find, workspace_root=workspace_root, base=base)
+    return json.dumps(res, separators=(",", ":"))
+
+
 def main():
     """
     `kortext-server` (what agy launches): stdio proxy to the shared daemon, starting it if needed.

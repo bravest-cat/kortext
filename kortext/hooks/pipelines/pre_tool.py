@@ -369,6 +369,16 @@ class AntiRipgrepGate:
                     f"Use `seek_symbol(symbol_name='{sym}')` for deterministic AST point lookup (<2ms, <150 tokens) "
                     f"or `trace_symbol_impact` to preserve context tokens.{hint}"
                 )
+                try:
+                    from kortext.savings import record_savings_event
+                    record_savings_event(
+                        event="grep_denied",
+                        session_id=context.session_id or "",
+                        project=context.workspace_project or "kortext",
+                        query_or_symbol=sym,
+                    )
+                except Exception:
+                    pass
                 return InterceptorResult.deny(reason=reason)
             return InterceptorResult.allow()
 
@@ -427,6 +437,16 @@ class AntiRipgrepGate:
                 f"Use `seek_symbol(symbol_name='{sym}')` for deterministic AST point lookup (<2ms, <150 tokens) "
                 f"or `trace_symbol_impact` to preserve context tokens and prevent context degradation.{hint}"
             )
+            try:
+                from kortext.savings import record_savings_event
+                record_savings_event(
+                    event="grep_denied",
+                    session_id=context.session_id or "",
+                    project=context.workspace_project or "kortext",
+                    query_or_symbol=sym,
+                )
+            except Exception:
+                pass
             return InterceptorResult.deny(reason=reason)
 
         return InterceptorResult.allow()
