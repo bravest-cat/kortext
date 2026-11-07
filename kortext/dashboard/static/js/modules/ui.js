@@ -134,11 +134,54 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Tab Switcher Router
-export function setTab(tab) {
+// Accessible Error and Empty States
+export function renderErrorState(container, errorMsg, retryFn) {
+  if (!container) return;
+  container.innerHTML = '';
+  const box = document.createElement('div');
+  box.className = 'p-6 text-center space-y-3 font-mono text-xs text-rose-400 bg-rose-950/20 border border-rose-800/40 rounded-xl my-4';
+
+  const title = document.createElement('div');
+  title.className = 'font-semibold text-rose-300';
+  title.textContent = `Error: ${errorMsg || 'Failed to load data'}`;
+  box.appendChild(title);
+
+  if (retryFn && typeof retryFn === 'function') {
+    const btn = document.createElement('button');
+    btn.className = 'px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 inline-flex items-center gap-1.5 transition text-xs font-mono cursor-pointer';
+    btn.setAttribute('data-lucide', 'refresh-cw');
+    btn.innerHTML = '<i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> Retry';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      retryFn();
+    });
+    box.appendChild(btn);
+  }
+  container.appendChild(box);
+  if (window.lucide) window.lucide.createIcons(container);
+}
+
+export function renderEmptyState(container, message = 'nothing indexed yet, run kortext init') {
+  if (!container) return;
+  container.innerHTML = '';
+  const box = document.createElement('div');
+  box.className = 'p-8 text-center space-y-2 font-mono text-xs text-slate-400 bg-slate-900/40 border border-dashed border-slate-800 rounded-xl my-4';
+  const text = document.createElement('div');
+  text.textContent = message;
+  box.appendChild(text);
+  container.appendChild(box);
+}
+
+// Tab Switcher Router with ARIA & URL hash preservation
+export function setTab(tab, updateHash = true) {
+  const validTabs = ['overview', 'graph', 'tasks', 'blast', 'journal', 'memory', 'retrieval', 'collections', 'health'];
+  if (!validTabs.includes(tab)) tab = 'overview';
+
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.remove('border-indigo-500', 'text-indigo-400');
     btn.classList.add('border-transparent', 'text-slate-400');
+    btn.setAttribute('aria-selected', 'false');
+    btn.setAttribute('tabindex', '-1');
   });
   document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
 
@@ -147,12 +190,19 @@ export function setTab(tab) {
   if (activeBtn) {
     activeBtn.classList.add('border-indigo-500', 'text-indigo-400');
     activeBtn.classList.remove('border-transparent', 'text-slate-400');
+    activeBtn.setAttribute('aria-selected', 'true');
+    activeBtn.setAttribute('tabindex', '0');
   }
   if (activeContent) activeContent.classList.remove('hidden');
 
   state.activeTab = tab;
 
+  if (updateHash && window.location.hash !== `#${tab}`) {
+    history.replaceState(null, '', `#${tab}`);
+  }
+
   // Dispatch tab-specific loaders via window hooks
+  if (tab === 'overview' && window.loadOverview) window.loadOverview();
   if (tab === 'graph' && window.loadGraph) {
     if (window.populateGraphSelector) {
       window.populateGraphSelector().then(() => {
@@ -162,9 +212,10 @@ export function setTab(tab) {
       window.loadGraph();
     }
   }
-  if (tab === 'blast' && window.initBlastTab) window.initBlastTab();
   if (tab === 'tasks' && window.loadTasks) window.loadTasks();
+  if (tab === 'blast' && window.initBlastTab) window.initBlastTab();
   if (tab === 'journal' && window.loadJournal) window.loadJournal();
+  if (tab === 'memory' && window.loadMemory) window.loadMemory();
   if (tab === 'health' && window.loadHealth) window.loadHealth();
   if (tab === 'collections' && window.loadCollections) window.loadCollections();
   if (tab === 'retrieval' && window.populateRetrievalCollections) window.populateRetrievalCollections();
@@ -173,3 +224,56 @@ export function setTab(tab) {
     if (window.lucide) window.lucide.createIcons();
   }, 50);
 }
+
+// Arrow-key tab navigation and hash synchronization
+export function setupTabNavigation() {
+  const tablist = document.getElementById('main-tablist');
+  if (tablist) {
+    const tabs = Array.from(tablist.querySelectorAll('[role="tab"]'));
+    tablist.addEventListener('keydown', (e) => {
+      const currentTab = document.activeElement;
+      const currentIndex = tabs.indexOf(currentTab);
+      if (currentIndex === -1) return;
+
+      let targetIndex = -1;
+      if (e.key === 'ArrowRight') {
+        targetIndex = (currentIndex + 1) % tabs.length;
+      } else if (e.key === 'ArrowLeft') {
+        targetIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+      } else if (e.key === 'Home') {
+        targetIndex = 0;
+      } else if (e.key === 'End') {
+        targetIndex = tabs.length - 1;
+      }
+
+      if (targetIndex !== -1) {
+        e.preventDefault();
+        const targetTab = tabs[targetIndex];
+        targetTab.focus();
+        const tabName = targetTab.id.replace('tab-btn-', '');
+        setTab(tabName);
+      }
+    });
+
+    tabs.forEach(tabBtn => {
+      tabBtn.addEventListener('click', () => {
+        const tabName = tabBtn.id.replace('tab-btn-', '');
+        setTab(tabName);
+      });
+    });
+  }
+
+  window.addEventListener('hashchange', () => {
+    const hash = window.location.hash.slice(1);
+    if (hash && hash !== state.activeTab) {
+      setTab(hash, false);
+    }
+  });
+
+  // Activate tab from URL hash if provided
+  const initialHash = window.location.hash.slice(1);
+  const validTabs = ['overview', 'graph', 'tasks', 'blast', 'journal', 'memory', 'retrieval', 'collections', 'health'];
+  const initialTab = validTabs.includes(initialHash) ? initialHash : 'overview';
+  setTab(initialTab, false);
+}
+

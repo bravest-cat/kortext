@@ -1,0 +1,14 @@
+{
+  "artifactDirectoryPath": "/tmp/test-brain",
+  "conversationId": "test-conv-1234",
+  "error": "",
+  "executionNum": 0,
+  "fullyIdle": true,
+  "lastUserInput": "test user request",
+  "modelName": "gemini-3.8-flash-low",
+  "terminationReason": "NO_TOOL_CALL",
+  "transcriptPath": "/tmp/test-brain/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/tmp/test-repo"
+  ]
+}

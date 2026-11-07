@@ -62,3 +62,32 @@ def test_two_windows_share_one_daemon_and_embedded_qdrant(isolated_daemon):
 
     health = f"http://127.0.0.1:{daemon.port()}/health"
     assert httpx.get(health, timeout=2).status_code == 401
+
+
+def test_proxy_forwards_meta_to_daemon(isolated_daemon, tmp_path):
+    import json
+    from fastmcp import Client
+    from fastmcp.client.transports import StdioTransport
+
+    server = [sys.executable, "-c", "from kortext.server import main; main()"]
+
+    async def run():
+        async with Client(StdioTransport(command=server[0], args=server[1:], env=dict(os.environ))) as c:
+            res = await c.call_tool(
+                "memory_session_handoff",
+                {
+                    "action": "create",
+                    "baton_id": "test_stdio_meta_baton",
+                    "current_scope": "Testing meta arrival through stdio proxy",
+                },
+                meta={"antigravity.google/root_conversation_id": "conv_root_stdio_42"},
+            )
+            return res.content[0].text if res.content else ""
+
+    output = asyncio.run(asyncio.wait_for(run(), 60))
+    assert "test_stdio_meta_baton" in output
+
+    handoff_file = tmp_path / ".kortext" / "handoffs" / "test_stdio_meta_baton.json"
+    assert handoff_file.is_file()
+    baton_data = json.loads(handoff_file.read_text(encoding="utf-8"))
+    assert baton_data.get("root_conversation_id") == "conv_root_stdio_42"

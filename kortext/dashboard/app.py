@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from kortext.dashboard.routes import (
     actions_router,
     journal_router,
+    memory_router,
     query_router,
     status_router,
 )
@@ -107,6 +108,15 @@ async def security_and_cache_middleware(request: Request, call_next):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    else:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "font-src 'self' data:;"
+        )
     return response
 
 
@@ -115,15 +125,44 @@ app.include_router(status_router)
 app.include_router(journal_router)
 app.include_router(query_router)
 app.include_router(actions_router)
+app.include_router(memory_router)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    from fastapi.responses import FileResponse
+    fav = STATIC_DIR / "favicon.ico"
+    if fav.is_file():
+        return FileResponse(fav)
+    return HTMLResponse(status_code=204)
+
+
+
+def get_kortext_version() -> str:
+    try:
+        import importlib.metadata
+        return importlib.metadata.version("kortext")
+    except Exception:
+        try:
+            import tomllib
+            p = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
+            if p.is_file():
+                data = tomllib.loads(p.read_text(encoding="utf-8"))
+                return str(data.get("project", {}).get("version", "2.0.0"))
+        except Exception:
+            pass
+        return "2.0.0"
 
 
 @app.get("/", response_class=HTMLResponse)
 @app.head("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Serves the primary dashboard single-page web console."""
+    ver = get_kortext_version()
     return templates.TemplateResponse(
         request=request,
         name="index.html",
+        context={"version": ver},
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"},
     )
 

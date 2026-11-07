@@ -55,6 +55,7 @@ class HandoffRecord(BaseModel):
     modified_files: List[str] = Field(default_factory=list)
     tests_passed: Optional[bool] = None
     status: str = "pending"
+    root_conversation_id: Optional[str] = None
 
 
 def _normalize_handoff_payload(raw: Dict[str, Any], file_path: Optional[Path] = None) -> Dict[str, Any]:
@@ -83,6 +84,7 @@ def _normalize_handoff_payload(raw: Dict[str, Any], file_path: Optional[Path] = 
     data["active_blast_radius"] = blast
     data["modified_files"] = mod_files
     data.setdefault("status", "pending")
+    data.setdefault("root_conversation_id", raw.get("root_conversation_id"))
     return data
 
 
@@ -147,6 +149,7 @@ class HandoffManager:
         active_blast_radius: Optional[list[str]] = None,
         task_id: Optional[str] = None,
         tests_passed: Optional[bool] = None,
+        root_conversation_id: Optional[str] = None,
     ) -> str:
         """Create a new cross-agent handoff baton using the unified HandoffRecord schema."""
         now = datetime.now(timezone.utc).isoformat()
@@ -170,6 +173,7 @@ class HandoffManager:
             modified_files=list(active_blast_radius or []),
             tests_passed=tests_passed,
             status="pending",
+            root_conversation_id=root_conversation_id,
         )
         data = record.model_dump(exclude_none=True)
 
@@ -196,6 +200,7 @@ class HandoffManager:
         self,
         baton_id: Optional[str] = None,
         target_agent: Optional[str] = None,
+        root_conversation_id: Optional[str] = None,
     ) -> str:
         """Read a handoff baton or task handoff by ID or the latest pending baton for target_agent."""
         files = self._collect_handoff_files()
@@ -208,7 +213,19 @@ class HandoffManager:
             if not safe_id:
                 return f"⚠️ Invalid baton_id={baton_id!r}."
             exact = [f for f in files if f.stem in (safe_id, f"task_handoff_{safe_id}")]
-            target_file = (exact or [f for f in files if safe_id in f.stem] or [None])[0]
+            matches = exact or [f for f in files if safe_id in f.stem]
+            if root_conversation_id:
+                for candidate in matches:
+                    try:
+                        with open(candidate, "r", encoding="utf-8") as jf:
+                            d = _normalize_handoff_payload(json.load(jf), candidate)
+                        if d.get("root_conversation_id") == root_conversation_id:
+                            target_file = candidate
+                            break
+                    except Exception:
+                        continue
+            if not target_file and matches:
+                target_file = matches[0]
         else:
             for f in files:
                 try:
@@ -218,6 +235,8 @@ class HandoffManager:
                         if d.get("status") == "pending" and (
                             not target_agent or d.get("target_agent") in (target_agent, "any")
                         ):
+                            if root_conversation_id and d.get("root_conversation_id") != root_conversation_id:
+                                continue
                             target_file = f
                             break
                 except Exception:
@@ -230,14 +249,16 @@ class HandoffManager:
             data = _normalize_handoff_payload(json.load(jf), target_file)
         return json.dumps(data, separators=(",", ":"))
 
-    def list_batons(self, limit: int = 10) -> str:
-        """List recent handoff batons up to limit."""
+    def list_batons(self, limit: int = 10, root_conversation_id: Optional[str] = None) -> str:
+        """List recent handoff batons up to limit, optionally filtered by root_conversation_id."""
         files = self._collect_handoff_files()
         summaries = []
-        for f in files[:limit]:
+        for f in files:
             try:
                 with open(f, "r", encoding="utf-8") as jf:
                     d = _normalize_handoff_payload(json.load(jf), f)
+                if root_conversation_id and d.get("root_conversation_id") != root_conversation_id:
+                    continue
                 summaries.append({
                     "baton_id": d.get("baton_id"),
                     "task_id": d.get("task_id"),
@@ -245,7 +266,10 @@ class HandoffManager:
                     "target_agent": d.get("target_agent"),
                     "current_scope": d.get("current_scope"),
                     "status": d.get("status"),
+                    "root_conversation_id": d.get("root_conversation_id"),
                 })
+                if len(summaries) >= limit:
+                    break
             except Exception:
                 logger.debug("Suppressed non-fatal exception", exc_info=True)
         return json.dumps({"pending_batons": summaries}, separators=(",", ":"))
@@ -294,6 +318,7 @@ class HandoffManager:
         unresolved_questions: Optional[list[str]] = None,
         active_blast_radius: Optional[list[str]] = None,
         baton_id: Optional[str] = None,
+        root_conversation_id: Optional[str] = None,
     ) -> str:
         """Dispatch handoff action to the appropriate handler method."""
         action_norm = action.lower().strip()
@@ -304,11 +329,17 @@ class HandoffManager:
                 open_hypotheses=open_hypotheses,
                 unresolved_questions=unresolved_questions,
                 active_blast_radius=active_blast_radius,
+                task_id=baton_id,
+                root_conversation_id=root_conversation_id,
             )
         elif action_norm == "read":
-            return self.read_baton(baton_id=baton_id, target_agent=target_agent)
+            return self.read_baton(
+                baton_id=baton_id,
+                target_agent=target_agent,
+                root_conversation_id=root_conversation_id,
+            )
         elif action_norm == "list":
-            return self.list_batons()
+            return self.list_batons(root_conversation_id=root_conversation_id)
         elif action_norm == "complete":
             return self.complete_baton(baton_id=baton_id)
         return f"⚠️ Unknown action '{action}'. Use create, read, list, or complete."

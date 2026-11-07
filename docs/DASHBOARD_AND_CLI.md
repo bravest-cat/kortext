@@ -18,7 +18,8 @@ kortext dashboard
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        KORTEXT COGNITIVE DASHBOARD                     │
 ├────────────────────────────────────────────────────────────────────────┤
-│  [Graph Explorer] [Task Kanban] [Decision Journal] [Retrieval] [Health]│
+│  [Overview] [Graph Explorer] [Task Kanban] [Decision Journal]          │
+│  [Memory Inbox] [Retrieval] [Health]                                   │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
 │   Knowledge Graph Canvas HUD             Companion Inspector Panel     │
@@ -34,6 +35,15 @@ kortext dashboard
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
+The interface is organized into seven tabs:
+- **Overview:** Substrate and daemon status, re-index spool queue depth, and estimated token savings.
+- **Graph Explorer:** Code symbol knowledge graph with subsystem clustering and neighborhood isolation.
+- **Task Kanban:** 5-column drag-and-drop Task DAG board.
+- **Decision Journal:** Searchable episodic memory records and technical decisions.
+- **Memory Inbox:** Review, edit, approve, and supersede episodic facts with CSRF protection.
+- **Retrieval:** Multi-tier search sandbox comparing dense, sparse, and graph scores.
+- **Health:** Substrate connectivity and hook execution diagnostics.
+
 ---
 
 ## 2. Modular ES Modules Frontend Architecture
@@ -47,15 +57,20 @@ kortext/dashboard/static/js/
     ├── state.js             # Centralized reactive application state store
     ├── api.js               # Async fetch client with error envelopes and toasts
     ├── ui.js                # Toast notifications, modals, and WCAG AA contrast helpers
+    ├── overview.js          # Overview landing metrics, spool status, and token savings
     ├── health.js            # Substrate health, 5-tier memory grid, and hooks status
     ├── graph.js             # Knowledge Graph explorer & Vis.js network manager
     ├── graph_inspector.js   # Relationship palette, exact link inspector, side drawer
     ├── tasks.js             # Interactive 5-column Drag-and-Drop Task DAG Kanban board
     ├── journal.js           # Decision journal & 8-category outcome taxonomy explorer
+    ├── memory.js            # Memory Inbox fact inspection, editing, and superseding
     ├── retrieval.js         # Multi-tier RRF retrieval sandbox & score breakdown
     ├── blast.js             # Blast radius analyzer & hierarchical caller/callee tree
-    └── dream.js             # Cognitive Dream Mode trigger modal
+    ├── dream.js             # Cognitive Dream Mode trigger modal
+    └── icons.js             # Inlined SVG icon definitions
 ```
+
+The Content-Security-Policy still allows `unsafe-inline` for scripts, because about 60 inline handlers remain in `index.html`.
 
 ---
 
@@ -161,3 +176,15 @@ Starts the local dashboard server:
 ```bash
 DASHBOARD_PORT=8004 kortext dashboard
 ```
+
+### `kortext init`
+Initializes setup, substrate binaries, daemon processes, and workspace indexing in a single command.
+
+### `kortext doctor`
+Runs diagnostic checks across Python version, substrate binaries, daemons, hooks, and index health.
+
+### `kortext savings`
+Reports estimated token savings computed from logged MCP tool events.
+
+### `kortext affected`
+Maps git diffs to affected test files via static AST call graphs.

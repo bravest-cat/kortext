@@ -226,10 +226,11 @@ async def test_record_system_outcome_nonblocking(tmp_path, monkeypatch):
         )
         assert "Recorded: 'Async Test'" in res
         # Verify journal was written
-        journal_files = list(tmp_path.glob("*.md"))
+        journal_files = [f for f in tmp_path.glob("*.md") if f.name != "INDEX.md"]
         assert len(journal_files) == 1
         content = journal_files[0].read_text()
         assert "Async Test" in content
+        assert (tmp_path / "INDEX.md").is_file()
 
 
 @pytest.mark.anyio

@@ -224,7 +224,13 @@ def resolve_session_token_state(
     figures are used, so one agy window never acts on another window's context usage.
     """
     payload_dict = raw_payload if isinstance(raw_payload, (dict, MappingProxyType)) else {}
-    session_id = session_id or str(payload_dict.get("conversationId") or payload_dict.get("sessionId") or "")
+    session_id = session_id or str(
+        payload_dict.get("conversationId")
+        or payload_dict.get("conversation_id")
+        or payload_dict.get("sessionId")
+        or payload_dict.get("session_id")
+        or ""
+    )
     cw = payload_dict.get("context_window")
     cw_dict = cw if isinstance(cw, (dict, MappingProxyType)) else {}
 
@@ -259,9 +265,17 @@ def resolve_session_token_state(
             if hud_file.is_file():
                 hud_data = json.loads(hud_file.read_text(encoding="utf-8"))
                 sessions = hud_data.get("sessions") if isinstance(hud_data, dict) else None
-                if session_id and isinstance(sessions, dict):
-                    # Per-session figures exist: use only this session's, never another window's.
-                    hud_data = sessions.get(session_id)
+                if session_id:
+                    if isinstance(sessions, dict):
+                        # Per-session figures exist: use only this session's, never another window's.
+                        hud_data = sessions.get(session_id)
+                    elif isinstance(hud_data, dict):
+                        # No sessions dict: only discard if hud_data explicitly tags a different session.
+                        h_sid = hud_data.get("session_id") or hud_data.get("conversation_id")
+                        if h_sid and h_sid != session_id:
+                            hud_data = None
+                elif isinstance(sessions, dict):
+                    hud_data = None
                 if isinstance(hud_data, dict):
                     updated_at = float(hud_data.get("updated_at") or 0.0)
                     if updated_at <= 0.0 or (time.time() - updated_at) <= max_hud_age_sec:

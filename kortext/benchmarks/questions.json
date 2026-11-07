@@ -1,0 +1,416 @@
+[
+  {
+    "id": "search_01",
+    "type": "search",
+    "question": "what stops two agy windows from fighting over the vector store lock",
+    "gold_files": [
+      "kortext/_qdrant.py"
+    ],
+    "gold_symbols": [
+      "is_embedded_qdrant_locked",
+      "EmbeddedQdrantLockError"
+    ],
+    "rg_pattern": "vector|store|lock",
+    "rg_pattern_informed": "EmbeddedQdrantLockError|is_embedded_qdrant_locked"
+  },
+  {
+    "id": "search_02",
+    "type": "search",
+    "question": "how does the background process daemon prevent multiple instances from spawning at the same time",
+    "gold_files": [
+      "kortext/daemon.py"
+    ],
+    "gold_symbols": [
+      "ensure_running",
+      "_spawn"
+    ],
+    "rg_pattern": "daemon|process|spawning",
+    "rg_pattern_informed": "def ensure_running|def _spawn"
+  },
+  {
+    "id": "search_03",
+    "type": "search",
+    "question": "how are prompt injection payloads and suspicious system command arguments detected and blocked",
+    "gold_files": [
+      "kortext/trust/sanitizer.py"
+    ],
+    "gold_symbols": [
+      "CausalSanitizer",
+      "SecurityViolation"
+    ],
+    "rg_pattern": "prompt|injection|payloads",
+    "rg_pattern_informed": "class CausalSanitizer|class SecurityViolation"
+  },
+  {
+    "id": "search_04",
+    "type": "search",
+    "question": "how are task dependencies tracked as an acyclic graph to identify unblocked work items",
+    "gold_files": [
+      "kortext/tasks/tracker.py"
+    ],
+    "gold_symbols": [
+      "TaskDAGTracker"
+    ],
+    "rg_pattern": "task|dependencies|graph",
+    "rg_pattern_informed": "class TaskDAGTracker|get_ready_tasks"
+  },
+  {
+    "id": "search_05",
+    "type": "search",
+    "question": "how is session state packaged into handoff batons when switching between agents",
+    "gold_files": [
+      "kortext/handoff.py"
+    ],
+    "gold_symbols": [
+      "HandoffManager"
+    ],
+    "rg_pattern": "session|handoff|batons",
+    "rg_pattern_informed": "class HandoffManager|memory_session_handoff"
+  },
+  {
+    "id": "search_06",
+    "type": "search",
+    "question": "how does background consolidation prune contradictory facts and cluster symbols into subsystems",
+    "gold_files": [
+      "kortext/dream.py"
+    ],
+    "gold_symbols": [
+      "DreamEngine"
+    ],
+    "rg_pattern": "consolidation|prune|cluster",
+    "rg_pattern_informed": "class KortextDreamEngine|run_dream_cycle"
+  },
+  {
+    "id": "search_07",
+    "type": "search",
+    "question": "how are rankings from dense vector search, lexical matching, ast, and temporal recency merged together",
+    "gold_files": [
+      "kortext/retrieval/fusion.py"
+    ],
+    "gold_symbols": [
+      "rank_candidates_rrf"
+    ],
+    "rg_pattern": "rankings|dense|lexical",
+    "rg_pattern_informed": "def rank_candidates_rrf"
+  },
+  {
+    "id": "search_08",
+    "type": "search",
+    "question": "how does graph traversal calculate multi-hop blast radius when code is refactored",
+    "gold_files": [
+      "kortext/symbols/graph_traversal.py"
+    ],
+    "gold_symbols": [
+      "SymbolGraphTraversalMixin",
+      "trace_symbol_impact"
+    ],
+    "rg_pattern": "traversal|blast|radius",
+    "rg_pattern_informed": "trace_symbol_impact|SymbolGraphTraversalMixin"
+  },
+  {
+    "id": "search_09",
+    "type": "search",
+    "question": "how are episodic memory facts scored with exponential time decay and validity intervals",
+    "gold_files": [
+      "kortext/episodic/driver.py"
+    ],
+    "gold_symbols": [
+      "AgentNativeEpisodicDriver"
+    ],
+    "rg_pattern": "episodic|memory|validity",
+    "rg_pattern_informed": "class AgentNativeEpisodicDriver|_score_candidates"
+  },
+  {
+    "id": "search_10",
+    "type": "search",
+    "question": "how are filesystem modification events debounced and queued for incremental re-indexing",
+    "gold_files": [
+      "kortext/watcher.py"
+    ],
+    "gold_symbols": [
+      "DebouncedChangeHandler",
+      "KortextIncrementalSync"
+    ],
+    "rg_pattern": "debounced|queued|incremental",
+    "rg_pattern_informed": "class DebouncedChangeHandler|class KortextIncrementalSync"
+  },
+  {
+    "id": "seek_01",
+    "type": "seek",
+    "question": "where is SymbolSeekEngine defined",
+    "symbol": "SymbolSeekEngine",
+    "gold_files": [
+      "kortext/symbols/seek.py"
+    ],
+    "gold_symbols": [
+      "SymbolSeekEngine"
+    ],
+    "rg_pattern": "class SymbolSeekEngine"
+  },
+  {
+    "id": "seek_02",
+    "type": "seek",
+    "question": "where is RetrievalEngine defined",
+    "symbol": "RetrievalEngine",
+    "gold_files": [
+      "kortext/retrieval/engine.py"
+    ],
+    "gold_symbols": [
+      "RetrievalEngine"
+    ],
+    "rg_pattern": "class RetrievalEngine"
+  },
+  {
+    "id": "seek_03",
+    "type": "seek",
+    "question": "where is ASTCodeSplitter defined",
+    "symbol": "ASTCodeSplitter",
+    "gold_files": [
+      "kortext/chunking/ast_splitter.py"
+    ],
+    "gold_symbols": [
+      "ASTCodeSplitter"
+    ],
+    "rg_pattern": "class ASTCodeSplitter"
+  },
+  {
+    "id": "seek_04",
+    "type": "seek",
+    "question": "where is SymbolGraphManager defined",
+    "symbol": "SymbolGraphManager",
+    "gold_files": [
+      "kortext/symbols/graph.py"
+    ],
+    "gold_symbols": [
+      "SymbolGraphManager"
+    ],
+    "rg_pattern": "class SymbolGraphManager"
+  },
+  {
+    "id": "seek_05",
+    "type": "seek",
+    "question": "where is FalkorDBClient defined",
+    "symbol": "FalkorDBClient",
+    "gold_files": [
+      "kortext/falkordb_client.py"
+    ],
+    "gold_symbols": [
+      "FalkorDBClient"
+    ],
+    "rg_pattern": "class FalkorDBClient"
+  },
+  {
+    "id": "seek_06",
+    "type": "seek",
+    "question": "where is TaskDAGTracker defined",
+    "symbol": "TaskDAGTracker",
+    "gold_files": [
+      "kortext/tasks/tracker.py"
+    ],
+    "gold_symbols": [
+      "TaskDAGTracker"
+    ],
+    "rg_pattern": "class TaskDAGTracker"
+  },
+  {
+    "id": "seek_07",
+    "type": "seek",
+    "question": "where is HandoffManager defined",
+    "symbol": "HandoffManager",
+    "gold_files": [
+      "kortext/handoff.py"
+    ],
+    "gold_symbols": [
+      "HandoffManager"
+    ],
+    "rg_pattern": "class HandoffManager"
+  },
+  {
+    "id": "seek_08",
+    "type": "seek",
+    "question": "where is CausalSanitizer defined",
+    "symbol": "CausalSanitizer",
+    "gold_files": [
+      "kortext/trust/sanitizer.py"
+    ],
+    "gold_symbols": [
+      "CausalSanitizer"
+    ],
+    "rg_pattern": "class CausalSanitizer"
+  },
+  {
+    "id": "seek_09",
+    "type": "seek",
+    "question": "where is AgentNativeEpisodicDriver defined",
+    "symbol": "AgentNativeEpisodicDriver",
+    "gold_files": [
+      "kortext/episodic/driver.py"
+    ],
+    "gold_symbols": [
+      "AgentNativeEpisodicDriver"
+    ],
+    "rg_pattern": "class AgentNativeEpisodicDriver"
+  },
+  {
+    "id": "seek_10",
+    "type": "seek",
+    "question": "where is DreamEngine defined",
+    "symbol": "DreamEngine",
+    "gold_files": [
+      "kortext/dream.py"
+    ],
+    "gold_symbols": [
+      "DreamEngine"
+    ],
+    "rg_pattern": "class DreamEngine"
+  },
+  {
+    "id": "trace_01",
+    "type": "trace",
+    "question": "what calls extract_symbol_candidates",
+    "symbol": "extract_symbol_candidates",
+    "gold_files": [
+      "kortext/retrieval/engine.py",
+      "kortext/hooks/pipelines/pre_tool.py",
+      "kortext/hooks/pipelines/pre_invoke.py"
+    ],
+    "gold_symbols": [
+      "_extract_symbol_candidates",
+      "_extract_symbol_from_pattern",
+      "process"
+    ],
+    "rg_pattern": "extract_symbol_candidates\\("
+  },
+  {
+    "id": "trace_02",
+    "type": "trace",
+    "question": "what calls is_embedded_qdrant_locked",
+    "symbol": "is_embedded_qdrant_locked",
+    "gold_files": [
+      "kortext/_qdrant.py",
+      "kortext/dashboard/routes/actions.py"
+    ],
+    "gold_symbols": [
+      "get_qdrant_client",
+      "get_async_qdrant_client"
+    ],
+    "rg_pattern": "is_embedded_qdrant_locked\\("
+  },
+  {
+    "id": "trace_03",
+    "type": "trace",
+    "question": "what calls rank_candidates_rrf",
+    "symbol": "rank_candidates_rrf",
+    "gold_files": [
+      "kortext/retrieval/engine.py"
+    ],
+    "gold_symbols": [
+      "_rank_candidates"
+    ],
+    "rg_pattern": "rank_candidates_rrf\\("
+  },
+  {
+    "id": "trace_04",
+    "type": "trace",
+    "question": "what calls get_dense_embedder",
+    "symbol": "get_dense_embedder",
+    "gold_files": [
+      "kortext/episodic/driver.py",
+      "kortext/ingest.py"
+    ],
+    "gold_symbols": [
+      "_dense_embedder",
+      "index_single_file",
+      "ingest"
+    ],
+    "rg_pattern": "get_dense_embedder\\("
+  },
+  {
+    "id": "trace_05",
+    "type": "trace",
+    "question": "what calls find_definition",
+    "symbol": "find_definition",
+    "gold_files": [
+      "kortext/symbols/graph.py",
+      "kortext/symbols/graph_traversal.py"
+    ],
+    "gold_symbols": [
+      "find_references",
+      "trace_symbol_impact"
+    ],
+    "rg_pattern": "find_definition\\("
+  },
+  {
+    "id": "trace_06",
+    "type": "trace",
+    "question": "what calls execute_federated_query",
+    "symbol": "execute_federated_query",
+    "gold_files": [
+      "kortext/retrieval/engine.py"
+    ],
+    "gold_symbols": [
+      "federated_query"
+    ],
+    "rg_pattern": "execute_federated_query\\("
+  },
+  {
+    "id": "trace_07",
+    "type": "trace",
+    "question": "what calls resolve_workspace_root_for_collection",
+    "symbol": "resolve_workspace_root_for_collection",
+    "gold_files": [
+      "kortext/retrieval/federated.py",
+      "kortext/server.py"
+    ],
+    "gold_symbols": [
+      "execute_federated_query",
+      "search_knowledge_and_memory"
+    ],
+    "rg_pattern": "resolve_workspace_root_for_collection\\("
+  },
+  {
+    "id": "trace_08",
+    "type": "trace",
+    "question": "what calls format_impact_report",
+    "symbol": "format_impact_report",
+    "gold_files": [
+      "kortext/symbols/graph_traversal.py"
+    ],
+    "gold_symbols": [
+      "trace_symbol_impact"
+    ],
+    "rg_pattern": "format_impact_report\\("
+  },
+  {
+    "id": "trace_09",
+    "type": "trace",
+    "question": "what calls get_shared_falkordb_client",
+    "symbol": "get_shared_falkordb_client",
+    "gold_files": [
+      "kortext/cli.py",
+      "kortext/dashboard/routes/query.py",
+      "kortext/symbols/seek.py"
+    ],
+    "gold_symbols": [
+      "cmd_clean_graphs",
+      "list_graphs",
+      "__init__"
+    ],
+    "rg_pattern": "get_shared_falkordb_client\\("
+  },
+  {
+    "id": "trace_10",
+    "type": "trace",
+    "question": "what calls count_tokens",
+    "symbol": "count_tokens",
+    "gold_files": [
+      "kortext/chunking/ast_oversized.py",
+      "kortext/retrieval/federated.py"
+    ],
+    "gold_symbols": [
+      "_split_oversized_function",
+      "pack_federated_result"
+    ],
+    "rg_pattern": "count_tokens\\("
+  }
+]

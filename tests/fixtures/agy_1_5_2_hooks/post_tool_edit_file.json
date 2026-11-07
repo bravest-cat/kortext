@@ -1,0 +1,20 @@
+{
+  "artifactDirectoryPath": "/tmp/test-brain",
+  "conversationId": "test-conv-1234",
+  "error": "",
+  "lastUserInput": "test user request",
+  "modelName": "gemini-3.8-flash-low",
+  "stepIdx": 4,
+  "toolCall": {
+    "name": "edit_file",
+    "args": {
+      "Path": "/tmp/test-repo/module.py",
+      "Target": "def hello():\n    return 1\n",
+      "Replacement": "def hello():\n    return 2\n"
+    }
+  },
+  "transcriptPath": "/tmp/test-brain/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/tmp/test-repo"
+  ]
+}

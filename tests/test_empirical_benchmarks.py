@@ -20,7 +20,7 @@ from kortext.tasks.tracker import TaskDAGTracker
 from kortext.trust.sanitizer import CausalSanitizer, SecurityViolation
 
 
-def test_benchmark_seek_symbol_latency(benchmark_store):
+def test_benchmark_seek_symbol_latency():
     """Benchmark 2.1: seek_symbol Exact B-Tree Lookup Latency (Uncached FalkorDB vs Warm Cache)."""
     seek_engine = SymbolSeekEngine()
     # Warm socket connection once
@@ -46,15 +46,11 @@ def test_benchmark_seek_symbol_latency(benchmark_store):
     p95_uncached = float(np.percentile(uncached_times, 95))
     p50_cached = float(np.percentile(cached_times, 50))
 
-    benchmark_store["memory_retention"]["seek_symbol_uncached_p50_ms"] = round(p50_uncached, 3)
-    benchmark_store["memory_retention"]["seek_symbol_uncached_p95_ms"] = round(p95_uncached, 3)
-    benchmark_store["memory_retention"]["seek_symbol_cached_p50_ms"] = round(p50_cached, 4)
-
     assert p50_uncached < 15.0, f"Uncached FalkorDB seek_symbol p50 too slow: {p50_uncached:.2f} ms"
     assert p50_cached < 2.0, f"Cached seek_symbol p50 too slow: {p50_cached:.2f} ms"
 
 
-def test_benchmark_trace_impact_latency(benchmark_store):
+def test_benchmark_trace_impact_latency():
     """Benchmark 2.2: trace_symbol_impact 2-hop Blast Radius Latency."""
     mgr = SymbolGraphManager()
     for _ in range(3):
@@ -68,7 +64,6 @@ def test_benchmark_trace_impact_latency(benchmark_store):
 
     p50_impact = float(np.percentile(impact_times, 50))
     p95_impact = float(np.percentile(impact_times, 95))
-    benchmark_store["memory_retention"]["trace_impact_p50_ms"] = round(p50_impact, 3)
     assert p50_impact < 10.0, f"trace_symbol_impact p50 too slow: {p50_impact:.2f} ms"
     assert p95_impact < 25.0, f"trace_symbol_impact p95 too slow: {p95_impact:.2f} ms"
 

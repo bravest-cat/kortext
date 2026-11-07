@@ -35,7 +35,7 @@ All Kortext operations MUST communicate with memory substrates exclusively throu
 
 ### 2. FastMCP Sole Custodian Model
 - **Sole Custodianship:** The FastMCP daemon (`kortext.server`) is the single, exclusive owner of on-disk vector stores (Qdrant) and key-value state (RocksDB).
-- **Tool Mediation:** All vector queries, upserts, payload filtering, and memory indexing MUST flow through FastMCP server tools (`search_knowledge_and_memory`, `record_system_outcome`, `list_vector_collections`).
+- **Tool Mediation:** All vector queries, upserts, payload filtering, and memory indexing MUST flow through FastMCP server tools (`search_knowledge_and_memory`, `record_system_outcome`, `list_vector_collections`). When calling `record_system_outcome`, agents should pass `workspace_root`, the absolute path of the current workspace, so memory lands in the project.
 - **Direct Client Prohibition:** Subagents, background sidecars, and lifecycle hooks MUST NEVER instantiate `QdrantClient(path=...)` directly in embedded mode.
 - **Lock Contention Rationale:** Embedded Qdrant uses SQLite and RocksDB metadata backends that acquire exclusive advisory file locks (`LOCK_EX`). If an external process or subagent attempts to instantiate `QdrantClient(path=...)` while the server daemon is running, the operating system raises `sqlite3.OperationalError: database is locked`, crashes the execution worker, and risks corrupting vector index segments.
 

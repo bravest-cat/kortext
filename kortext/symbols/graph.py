@@ -125,6 +125,14 @@ class SymbolGraphManager(SymbolGraphTraversalMixin):
         # 2. Batch add declarations keyed by deterministic qualified_name
         clean_decls = []
         decl_qname_by_short: Dict[str, str] = {}
+        file_body_hashes: Dict[str, str] = {}
+        if declarations:
+            try:
+                from kortext.invariants import compute_file_ast_body_hashes
+                file_body_hashes = compute_file_ast_body_hashes(file_path)
+            except Exception:
+                file_body_hashes = {}
+
         for decl in declarations:
             name = decl.get("name")
             if not name or name == "anonymous":
@@ -138,6 +146,10 @@ class SymbolGraphManager(SymbolGraphTraversalMixin):
             decl_qname_by_short.setdefault(name_str, qname)
             if parent_str:
                 decl_qname_by_short.setdefault(f"{parent_str}.{name_str}", qname)
+
+            sym_target = f"{parent_str}.{name_str}".lower() if parent_str else name_str.lower()
+            body_h = file_body_hashes.get(sym_target) or file_body_hashes.get(name_str.lower()) or ""
+
             clean_decls.append({
                 "name": name_str,
                 "qualified_name": qname,
@@ -147,6 +159,7 @@ class SymbolGraphManager(SymbolGraphTraversalMixin):
                 "signature": str(decl.get("signature") or "")[:200],
                 "docstring": str(decl.get("docstring") or "")[:200],
                 "parent": parent_str,
+                "body_hash": body_h,
             })
 
         if clean_decls:
@@ -155,7 +168,7 @@ class SymbolGraphManager(SymbolGraphTraversalMixin):
                 "WITH f "
                 "UNWIND $declarations AS d "
                 "MERGE (s:Symbol {qualified_name: d.qualified_name}) "
-                "SET s.name = d.name, s.kind = d.kind, s.file_path = $path, s.parent = d.parent "
+                "SET s.name = d.name, s.kind = d.kind, s.file_path = $path, s.parent = d.parent, s.body_hash = d.body_hash "
                 "MERGE (s)-[:DEFINED_IN {kind: d.kind, line: d.line, end_line: d.end_line, signature: d.signature, docstring: d.docstring, parent: d.parent}]->(f)"
             )
             self._query(decl_cypher, {"path": file_path, "declarations": clean_decls})

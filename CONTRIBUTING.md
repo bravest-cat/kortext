@@ -48,6 +48,14 @@ cp .env.example .env
 
 Configure `EMBED_BASE_URL` and `EMBED_MODEL_NAME` to point to your local or remote inference endpoint (such as oMLX, TEI, Ollama, vLLM, or OpenAI).
 
+### 4. Dashboard Stylesheet Compilation
+
+Regenerate the static Tailwind stylesheet after editing templates or dashboard JS modules:
+
+```bash
+npx -y tailwindcss@3 -o kortext/dashboard/static/css/tailwind.css --content "./kortext/dashboard/templates/**/*.html,./kortext/dashboard/static/js/**/*.js" --minify
+```
+
 ---
 
 ## Testing & Quality Invariants

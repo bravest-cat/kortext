@@ -63,7 +63,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          uv sync --python ${{ matrix.python }} --extra tier2-languages --extra dev
+          uv sync --python ${{ matrix.python }} --extra tier2-languages --extra dev --extra bench
 
       - name: Run Kortext Test Suite
         env:

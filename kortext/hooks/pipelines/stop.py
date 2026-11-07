@@ -24,12 +24,16 @@ FILE_MODIFYING_TOOLS = frozenset({
     "write_to_file",
     "replace_file_content",
     "multi_replace_file_content",
+    "write_file",
+    "edit_file",
 })
 
 OUTCOME_TOOLS = frozenset({
     "record_system_outcome",
     "trigger_dream_mode",
 })
+
+VALID_TERMINATION_REASONS = frozenset({"model_stop", "NO_TOOL_CALL", ""})
 
 _EXPLICIT_RULE_RE = re.compile(r"(?:^|\n)\s*(?:Rule|Invariant)\s*:\s*([^\n]{12,240})", re.IGNORECASE)
 
@@ -72,7 +76,8 @@ def _analyze_transcript_outcomes(context: HookContext) -> Tuple[bool, bool, List
                     modified_files = True
                     if isinstance(args, (dict, MappingProxyType)):
                         tf = (
-                            args.get("TargetFile")
+                            args.get("Path")
+                            or args.get("TargetFile")
                             or args.get("target_file")
                             or args.get("path")
                             or args.get("file_path")
@@ -137,7 +142,7 @@ class GroundTruthTestGate:
         self.enforce = enforce or os.getenv("KORTEXT_TEST_GATE_ENFORCE", "0") == "1"
 
     def process(self, context: HookContext) -> InterceptorResult:
-        if context.execution_num != 1:
+        if context.execution_num not in (0, 1):
             return InterceptorResult.allow()
 
         dirty_file = get_kortext_home() / "run" / "dirty_files.json"
@@ -235,9 +240,9 @@ class ProjectDAGGuard:
 
     def process(self, context: HookContext) -> InterceptorResult:
         if (
-            context.execution_num != 1
+            context.execution_num not in (0, 1)
             or not context.fully_idle
-            or (context.termination_reason and context.termination_reason != "model_stop")
+            or (context.termination_reason and context.termination_reason not in VALID_TERMINATION_REASONS)
         ):
             return InterceptorResult.allow()
 
@@ -341,13 +346,20 @@ class OutcomePersistenceGuard:
 
     def process(self, context: HookContext) -> InterceptorResult:
         if (
-            context.execution_num != 1
+            context.execution_num not in (0, 1)
             or not context.fully_idle
-            or (context.termination_reason and context.termination_reason != "model_stop")
+            or (context.termination_reason and context.termination_reason not in VALID_TERMINATION_REASONS)
         ):
             return InterceptorResult.allow()
 
         modified_files, recorded_outcome, modified_paths = _analyze_transcript_outcomes(context)
+        if modified_files and modified_paths:
+            try:
+                from kortext.vault import record_session_log
+                record_session_log(context, modified_paths)
+            except Exception as exc:
+                logger.debug("Automatic session log recording skipped: %s", exc)
+
         if not modified_files or recorded_outcome:
             return InterceptorResult.allow()
 
@@ -374,6 +386,18 @@ class OutcomePersistenceGuard:
 
         if not self.enforce:
             return InterceptorResult.allow()
+
+        reminder_marker = "🧠 [Kortext Stop Guard]"
+        if context.execution_num > 0:
+            return InterceptorResult.allow()
+
+        if reminder_marker in context.last_user_input:
+            return InterceptorResult.allow()
+
+        for step in (context.read_transcript_steps() or ()):
+            step_content = str(step.get("content") or "")
+            if reminder_marker in step_content:
+                return InterceptorResult.allow()
 
         reason = (
             "🧠 [Kortext Stop Guard] Codebase files were modified in this session without "
@@ -542,11 +566,11 @@ class StopPipeline:
 
     def execute(self, context: HookContext) -> InterceptorResult:
         # Critical Antigravity Stop hook invariant (hooks.md):
-        # Never block termination if executionNum != 1, or if not a natural model_stop, or if background tasks are active.
+        # Never block termination if not fully idle or termination reason is not model_stop/NO_TOOL_CALL.
         if (
-            context.execution_num != 1
+            context.execution_num not in (0, 1)
             or not context.fully_idle
-            or (context.termination_reason and context.termination_reason != "model_stop")
+            or (context.termination_reason and context.termination_reason not in VALID_TERMINATION_REASONS)
         ):
             return InterceptorResult.stop()
 
@@ -562,5 +586,17 @@ class StopPipeline:
             except Exception as e:
                 logger.debug("Stop interceptor %s failed: %s", type(interceptor).__name__, e)
                 continue
+
+        try:
+            from kortext.vault import generate_memory_index, resolve_memory_dir
+
+            ws = getattr(context, "cwd", None)
+            if not ws:
+                wps = getattr(context, "workspace_paths", ())
+                ws = wps[0] if wps else None
+            mem_dir = resolve_memory_dir(workspace_root=ws, project=context.workspace_project)
+            generate_memory_index(mem_dir, project=context.workspace_project)
+        except Exception as exc:
+            logger.debug("Suppressed error generating memory index at Stop: %s", exc)
 
         return InterceptorResult.stop(data=MappingProxyType(merged_data))

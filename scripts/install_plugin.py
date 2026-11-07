@@ -83,7 +83,7 @@ def build_hooks_dict(runner_python: str = "") -> dict:
             "enabled": True,
             "PreToolUse": [
                 {
-                    "matcher": "(client:|mcp[:_]+kortext[:_]+|kortext:)?(run_command|grep_search|find_by_name|view_file|replace_file_content|multi_replace_file_content|write_to_file)",
+                    "matcher": "(client:|mcp[:_]+kortext[:_]+|kortext:)?(run_command|grep_search|find_by_name|view_file|replace_file_content|multi_replace_file_content|write_to_file|write_file|edit_file|read_file)",
                     "hooks": [
                         {
                             "type": "command",
@@ -98,7 +98,7 @@ def build_hooks_dict(runner_python: str = "") -> dict:
             "enabled": True,
             "PostToolUse": [
                 {
-                    "matcher": "(client:|mcp[:_]+kortext[:_]+|kortext:)?(run_command|write_to_file|replace_file_content|multi_replace_file_content|seek_symbol|trace_symbol_impact|manage_tasks|record_system_outcome)",
+                    "matcher": "(client:|mcp[:_]+kortext[:_]+|kortext:)?(run_command|write_to_file|replace_file_content|multi_replace_file_content|seek_symbol|trace_symbol_impact|manage_tasks|record_system_outcome|write_file|edit_file)",
                     "hooks": [
                         {
                             "type": "command",

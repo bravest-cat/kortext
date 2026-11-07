@@ -302,6 +302,86 @@ def compute_ast_body_hash(file_path: str, symbol_name: str) -> Optional[str]:
     return hashlib.sha256(normalized).hexdigest()
 
 
+def compute_file_ast_body_hashes(file_path: str) -> Dict[str, str]:
+    """Computes AST body hashes for all symbols in a file from a single parse."""
+    p = _resolve_invariant_file(file_path)
+    if not p.exists() or not p.is_file():
+        return {}
+
+    ext = p.suffix.lower()
+    hashes: Dict[str, str] = {}
+    if ext == ".py":
+        try:
+            src_bytes = p.read_bytes()
+            lines = src_bytes.splitlines(keepends=True)
+            offsets = [0]
+            for line in lines:
+                offsets.append(offsets[-1] + len(line))
+            tree = py_ast.parse(src_bytes)
+
+            def _hash_node(node: Any) -> Optional[str]:
+                if not getattr(node, "body", None):
+                    return None
+                start_byte = offsets[node.body[0].lineno - 1] + node.body[0].col_offset
+                end_byte = offsets[node.end_lineno - 1] + node.end_col_offset
+                body_bytes = src_bytes[start_byte:end_byte]
+                return hashlib.sha256(_normalize_body_slice(body_bytes, is_python=True)).hexdigest()
+
+            stack: List[Tuple[py_ast.AST, Optional[str]]] = [(tree, None)]
+            while stack:
+                curr, parent_cls = stack.pop()
+                if isinstance(curr, (py_ast.FunctionDef, py_ast.AsyncFunctionDef, py_ast.ClassDef)):
+                    c_name = curr.name.lower()
+                    h = _hash_node(curr)
+                    if h:
+                        if parent_cls:
+                            hashes[f"{parent_cls}.{c_name}"] = h
+                        if c_name not in hashes:
+                            hashes[c_name] = h
+                    next_cls = c_name if isinstance(curr, py_ast.ClassDef) else parent_cls
+                else:
+                    next_cls = parent_cls
+                for child in reversed(list(py_ast.iter_child_nodes(curr))):
+                    stack.append((child, next_cls))
+            return hashes
+        except Exception:
+            return {}
+
+    lang = LANG_MAP.get(ext) if LANG_MAP else None
+    if not lang or Parser is None:
+        return {}
+
+    try:
+        source_bytes = p.read_bytes()
+        parser = Parser(lang)
+        tree = parser.parse(source_bytes)
+        stack: List[Tuple[Any, Optional[str]]] = [(tree.root_node, None)]
+        while stack:
+            curr, enclosing_cls = stack.pop()
+            ident = get_identifier(curr, source_bytes)
+            ident_lower = ident.lower() if ident else None
+            is_container = any(k in curr.type for k in ("class", "struct", "impl", "interface"))
+            is_def = is_container or any(k in curr.type for k in ("function", "method", "type"))
+            if is_def and ident_lower:
+                body = get_body_node(curr)
+                if body:
+                    first_stmt = next((c for c in body.children if c.type != "comment"), body)
+                    body_bytes = source_bytes[first_stmt.start_byte : body.end_byte]
+                else:
+                    body_bytes = source_bytes[curr.start_byte : curr.end_byte]
+                h = hashlib.sha256(_normalize_body_slice(body_bytes, is_python=False)).hexdigest()
+                if enclosing_cls:
+                    hashes[f"{enclosing_cls}.{ident_lower}"] = h
+                if ident_lower not in hashes:
+                    hashes[ident_lower] = h
+            child_cls = ident_lower if (is_container and ident_lower) else enclosing_cls
+            for child in reversed(curr.children):
+                stack.append((child, child_cls))
+        return hashes
+    except Exception:
+        return {}
+
+
 def _extract_symbol_source_slice(file_path: str, symbol_name: str) -> Optional[str]:
     """
     Extracts the source slice belonging specifically to `symbol_name` (supporting `Class.method`)

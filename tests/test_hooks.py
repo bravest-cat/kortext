@@ -348,20 +348,29 @@ def test_stop_outcome_persistence_guard(tmp_path: Path):
     }))
     assert guard.process(ctx_read).decision == "allow"
 
-    # Case 2: Modified file without outcome -> continue required
+    # Case 2: Modified file without outcome -> continue required on first stop (executionNum: 0)
     t_file = tmp_path / "t.jsonl"
     t_file.write_text(json.dumps({
         "tool_calls": [{"name": "write_to_file", "args": {"TargetFile": "/foo.py"}}]
     }) + "\n")
     ctx_unpersisted = HookContext.from_stdin(raw_text=json.dumps({
-        "executionNum": 1,
-        "terminationReason": "model_stop",
+        "executionNum": 0,
+        "terminationReason": "NO_TOOL_CALL",
         "fullyIdle": True,
         "transcriptPath": str(t_file),
     }))
     res = guard.process(ctx_unpersisted)
     assert res.decision == "continue"
     assert "record_system_outcome" in (res.reason or "")
+
+    # executionNum > 0 allows stopping to prevent infinite loops
+    ctx_subsequent = HookContext.from_stdin(raw_text=json.dumps({
+        "executionNum": 1,
+        "terminationReason": "NO_TOOL_CALL",
+        "fullyIdle": True,
+        "transcriptPath": str(t_file),
+    }))
+    assert guard.process(ctx_subsequent).decision == "allow"
 
     # Case 3: Modified file with outcome -> stop allowed
     t_file.write_text(

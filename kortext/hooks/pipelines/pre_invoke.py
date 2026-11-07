@@ -380,6 +380,7 @@ class ContextBudgetAdvisor:
             raw_payload=context.raw_payload,
             transcript_path=context.transcript_path,
             model_name=context.model_name,
+            session_id=getattr(context, "conversation_id", "") or context.session_id,
         )
         est_tokens = token_state.estimated_tokens
         used_pct = token_state.used_percentage
@@ -527,6 +528,122 @@ class InvariantInjector:
         )
 
 
+class PromptSecretInterceptor:
+    """
+    Checks context.last_user_input for credentials and terminates turn before model call.
+    Active in standard and strict profiles unless KORTEXT_BLOCK_PROMPT_SECRETS=0.
+    """
+
+    def process(self, context: HookContext) -> InterceptorResult:
+        if os.getenv("KORTEXT_BLOCK_PROMPT_SECRETS", "1").strip().lower() in ("0", "false", "no", "off"):
+            return InterceptorResult.allow()
+
+        from kortext.hooks.runner import get_hook_profile
+
+        profile = get_hook_profile()
+        if profile not in ("standard", "strict"):
+            return InterceptorResult.allow()
+
+        user_input = getattr(context, "last_user_input", "") or ""
+        if not user_input or not user_input.strip():
+            return InterceptorResult.allow()
+
+        from kortext.trust.sanitizer import (
+            SECRET_PATTERNS,
+            normalize_for_security_scan,
+        )
+
+        candidates = [user_input]
+        norm = normalize_for_security_scan(user_input)
+        if norm and norm != user_input:
+            candidates.append(norm)
+
+        for text_to_scan in candidates:
+            if any(p.search(text_to_scan) for p in SECRET_PATTERNS):
+                user_msg = (
+                    "Blocked: Prompt contains potential credentials or sensitive tokens "
+                    "(API keys, access tokens, or private keys). Please remove credentials "
+                    "before submitting."
+                )
+                return InterceptorResult(
+                    decision="terminate",
+                    reason="Prompt contains credentials",
+                    data=MappingProxyType({
+                        "terminationBehavior": "terminate",
+                        "injectSteps": (
+                            {"errorMessage": {"userMessage": user_msg}},
+                        ),
+                    }),
+                )
+
+        return InterceptorResult.allow()
+
+
+class MemoryIndexLoader:
+    """
+    Loads and injects INDEX.md on Turn 0, capped at ~400 tokens (~1600 chars).
+    Silent when absent or when KORTEXT_LOAD_MEMORY_INDEX=0.
+    Enforces MINJA CausalSanitizer security check and provenance fencing.
+    """
+
+    def process(self, context: HookContext) -> InterceptorResult:
+        if not context.is_first_turn:
+            return InterceptorResult.allow()
+
+        if os.getenv("KORTEXT_LOAD_MEMORY_INDEX", "1").strip() == "0":
+            return InterceptorResult.allow()
+
+        from kortext.trust.sanitizer import CausalSanitizer, SecurityViolation, fence_memory_by_provenance
+        from kortext.vault import resolve_memory_dir
+
+        ws = getattr(context, "cwd", None)
+        if not ws:
+            wps = getattr(context, "workspace_paths", ())
+            ws = wps[0] if wps else None
+
+        proj = getattr(context, "workspace_project", None)
+        memory_dir = resolve_memory_dir(workspace_root=ws, project=proj)
+        index_file = memory_dir / "INDEX.md"
+
+        if not index_file.is_file():
+            return InterceptorResult.allow()
+
+        try:
+            content = index_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            return InterceptorResult.allow()
+
+        if not content:
+            return InterceptorResult.allow()
+
+        # Security check: must pass CausalSanitizer
+        sanitizer = CausalSanitizer()
+        try:
+            sanitizer.sanitize(
+                subject="INDEX.md",
+                relation="CONTEXT",
+                fact=content,
+                source_tier=3,
+                trust_level="speculative",
+            )
+        except SecurityViolation as sv:
+            logger.warning("INDEX.md blocked by CausalSanitizer: %s", sv)
+            return InterceptorResult.allow()
+
+        # Token cap at ~400 tokens (~1600 characters)
+        capped_content = content[:1600]
+
+        # Fence as unverified data
+        fenced = fence_memory_by_provenance(capped_content, trust_level="speculative", source_tier=3)
+        if "[end of unverified memory]" not in fenced:
+            fenced = f"{fenced.rstrip()}\n[end of unverified memory]"
+
+        inject_steps = ({"ephemeralMessage": fenced},)
+        return InterceptorResult.allow(
+            data=MappingProxyType({"injectSteps": inject_steps})
+        )
+
+
 class PreInvokePipeline:
     """
     Dispatches PreInvocation interceptors and consolidates any injected ephemeralMessage steps.
@@ -538,6 +655,7 @@ class PreInvokePipeline:
             self.interceptors = tuple(interceptors)
         else:
             default_list: List[Any] = [
+                PromptSecretInterceptor(),
                 SubstrateHealthProbe(),
                 FrontierDAGNotifier(),
                 BoostPromptGroundingProbe(),
@@ -545,11 +663,14 @@ class PreInvokePipeline:
             ]
             if os.getenv("KORTEXT_INJECT_INVARIANTS", "0") == "1":
                 default_list.append(InvariantInjector())
+            if os.getenv("KORTEXT_LOAD_MEMORY_INDEX", "1").strip() != "0":
+                default_list.append(MemoryIndexLoader())
             self.interceptors = tuple(default_list)
 
     def execute(self, context: HookContext) -> InterceptorResult:
         merged_data: Dict[str, Any] = {}
-        ephemeral_messages: List[str] = []
+        trusted_messages: List[str] = []
+        memory_index_messages: List[str] = []
         other_steps: List[Dict[str, Any]] = []
 
         for interceptor in self.interceptors:
@@ -561,36 +682,58 @@ class PreInvokePipeline:
                 else:
                     continue
 
+                if res.decision in ("terminate", "deny") or (
+                    res.data and res.data.get("terminationBehavior") == "terminate"
+                ):
+                    return res
+
                 if res.data:
                     for k, v in res.data.items():
                         if k == "injectSteps" and isinstance(v, (list, tuple)):
+                            is_mem_loader = isinstance(interceptor, MemoryIndexLoader)
                             for step in v:
                                 if isinstance(step, (dict, MappingProxyType)) and "ephemeralMessage" in step:
                                     msg_txt = str(step["ephemeralMessage"]).strip()
-                                    if msg_txt and msg_txt not in ephemeral_messages:
-                                        ephemeral_messages.append(msg_txt)
+                                    if not msg_txt:
+                                        continue
+                                    if (
+                                        is_mem_loader
+                                        or step.get("is_memory_index")
+                                        or msg_txt.startswith("[unverified memory")
+                                    ):
+                                        if "[end of unverified memory]" not in msg_txt:
+                                            msg_txt = f"{msg_txt.rstrip()}\n[end of unverified memory]"
+                                        if msg_txt not in memory_index_messages:
+                                            memory_index_messages.append(msg_txt)
+                                    else:
+                                        if msg_txt not in trusted_messages:
+                                            trusted_messages.append(msg_txt)
                                 elif isinstance(step, (dict, MappingProxyType)):
-                                    other_steps.append(dict(step))
+                                    clean_step = {sk: sv for sk, sv in step.items() if sk != "is_memory_index"}
+                                    other_steps.append(clean_step)
                         else:
                             merged_data[k] = v
             except Exception as e:
                 logger.debug("PreInvoke interceptor %s failed: %s", type(interceptor).__name__, e)
                 continue
 
-        final_steps: List[Dict[str, Any]] = []
         try:
             from kortext.hooks.pipelines.post_tool import consume_pending_advisories
 
             conv_id = getattr(context, "conversation_id", "") or ""
             sess_id = context.session_id or ""
             for pending_msg in consume_pending_advisories(session_id=sess_id, conversation_id=conv_id):
-                if pending_msg and pending_msg not in ephemeral_messages:
-                    ephemeral_messages.append(pending_msg)
+                pending_clean = str(pending_msg).strip()
+                if pending_clean and pending_clean not in trusted_messages:
+                    trusted_messages.append(pending_clean)
         except Exception as exc:
             logger.debug("Suppressed in pre_invoke:%d: %s", 607, exc)
 
-        if ephemeral_messages:
-            final_steps.append({"ephemeralMessage": "\n\n".join(ephemeral_messages)})
+        final_steps: List[Dict[str, Any]] = []
+        if trusted_messages:
+            final_steps.append({"ephemeralMessage": "\n\n".join(trusted_messages)})
+        for mem_msg in memory_index_messages:
+            final_steps.append({"ephemeralMessage": mem_msg})
         final_steps.extend(other_steps)
 
         if final_steps:

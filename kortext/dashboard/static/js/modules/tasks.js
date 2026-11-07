@@ -6,7 +6,7 @@
 import { state } from './state.js';
 import * as api from './api.js';
 import { formatEdgesNonOverlapping } from './graph.js';
-import { toast, escapeHtml, openModal, closeModal, createVisTooltip } from './ui.js';
+import { toast, escapeHtml, openModal, closeModal, createVisTooltip, renderErrorState, renderEmptyState } from './ui.js';
 
 export async function loadTasks() {
   const activeProj = state.activeProject !== 'all' ? state.activeProject : null;
@@ -49,6 +49,8 @@ export async function loadTasks() {
   } catch (err) {
     console.error('Error loading tasks:', err);
     toast('Error loading tasks: ' + err.message, 'error');
+    const container = document.getElementById('tasks-manifest-container') || document.getElementById('kanban-board-container');
+    if (container) renderErrorState(container, err.message, loadTasks);
   }
 }
 

@@ -26,6 +26,8 @@ FILE_MODIFYING_TOOLS = frozenset({
     "write_to_file",
     "replace_file_content",
     "multi_replace_file_content",
+    "write_file",
+    "edit_file",
 })
 
 MAX_SPOOL_FILES = 100
@@ -440,7 +442,14 @@ class ContextAndLoopAdvisor:
                 if not isinstance(t_args, (dict, MappingProxyType)):
                     continue
                 if t_name in FILE_MODIFYING_TOOLS:
-                    tf = t_args.get("TargetFile") or t_args.get("target_file") or t_args.get("path")
+                    tf = (
+                        t_args.get("Path")
+                        or t_args.get("TargetFile")
+                        or t_args.get("target_file")
+                        or t_args.get("path")
+                        or t_args.get("file_path")
+                        or t_args.get("filePath")
+                    )
                     if tf and str(tf) not in modified_files:
                         modified_files.append(str(tf))
                 elif "seek_symbol" in t_name or "trace_symbol_impact" in t_name:
@@ -549,13 +558,14 @@ class ContextAndLoopAdvisor:
             )
 
             steps = context.read_transcript_steps()
+            conv_id = getattr(context, "conversation_id", None) or context.session_id
             token_state = resolve_session_token_state(
                 raw_payload=context.raw_payload,
                 transcript_path=context.transcript_path,
                 steps=steps,
                 model_name=context.model_name,
+                session_id=conv_id,
             )
-            conv_id = getattr(context, "conversation_id", None) or context.session_id
             wm_info = check_and_update_compaction_watermark(
                 conversation_id=conv_id,
                 current_tokens=token_state.estimated_tokens,

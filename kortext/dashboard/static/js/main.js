@@ -4,11 +4,14 @@
  */
 
 import { state } from './modules/state.js';
+import * as icons from './modules/icons.js';
 import * as ui from './modules/ui.js';
+import * as overview from './modules/overview.js';
 import * as graph from './modules/graph.js';
 import * as blast from './modules/blast.js';
 import * as tasks from './modules/tasks.js';
 import * as journal from './modules/journal.js';
+import * as memory from './modules/memory.js';
 import * as retrieval from './modules/retrieval.js';
 import * as health from './modules/health.js';
 import * as dream from './modules/dream.js';
@@ -19,12 +22,18 @@ Object.assign(window, {
   dashboardState: state,
   state: state,
 
+  // Icons
+  lucide: icons,
+
   // UI & Routing
   setTab: ui.setTab,
   toast: ui.toast,
   openModal: ui.openModal,
   closeModal: ui.closeModal,
   copyToClipboard: ui.copyToClipboard,
+
+  // Overview Tab
+  loadOverview: overview.loadOverview,
 
   // Knowledge Graph
   populateGraphSelector: graph.populateGraphSelector,
@@ -80,6 +89,12 @@ Object.assign(window, {
   clearJournalTagFilter: journal.clearJournalTagFilter,
   viewJournalMarkdown: journal.viewJournalMarkdown,
 
+  // Memory Inbox
+  loadMemory: memory.loadMemory,
+  applyMemoryFilters: memory.applyMemoryFilters,
+  submitEditMemory: memory.submitEditMemory,
+  submitSupersedeMemory: memory.submitSupersedeMemory,
+
   // Retrieval Lab
   populateRetrievalCollections: retrieval.populateRetrievalCollections,
   executeRetrieval: retrieval.executeRetrieval,
@@ -105,19 +120,14 @@ Object.assign(window, {
 
 // Application Initialization
 function init() {
-  if (window.lucide) window.lucide.createIcons();
+  icons.createIcons();
+
+  // Setup accessible tabs and URL hash navigation
+  ui.setupTabNavigation();
 
   // Load health and telemetry on startup
   health.loadHealth();
   health.loadTelemetry();
-
-  // Initialize Knowledge Graph view
-  graph.populateGraphSelector().then(() => {
-    graph.loadGraph();
-  });
-
-  // Populate retrieval collections
-  retrieval.populateRetrievalCollections();
 
   // 15-second heartbeat for background daemons
   setInterval(() => {

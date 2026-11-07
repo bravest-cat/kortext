@@ -1,7 +1,7 @@
 [project]
 name = "kortext"
-version = "2.0.0"
-description = "5-Tier Dual-Memory, AST Code Intelligence & Cognitive OS for Google Antigravity CLI"
+version = "2.1.0"
+description = "Local memory, AST code intelligence, and task DAG plugin for Google Antigravity CLI"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.11"
@@ -18,7 +18,7 @@ classifiers = [
 ]
 keywords = [
   "antigravity", "mcp", "fastmcp", "code-intelligence", "rag",
-  "knowledge-graph", "falkordb", "qdrant", "tree-sitter", "ast", "hipporag"
+  "knowledge-graph", "falkordb", "qdrant", "tree-sitter", "ast"
 ]
 dependencies = [
   "fastmcp>=4.1",
@@ -42,7 +42,6 @@ dependencies = [
   "rich>=13.7",
   "falkordb>=1.7.1",
   "numpy>=1.26.0",
-  "scipy>=1.10.0",
   "psutil>=5.9.0",
   "jinja2>=3.1",
   "networkx>=3.0",
@@ -56,6 +55,9 @@ tier2-languages = [
   "tree-sitter-kotlin>=1.0.0",
   "tree-sitter-swift>=0.7.0",
   "tree-sitter-c-sharp>=0.23.0",
+]
+bench = [
+  "tiktoken>=0.7.0",
 ]
 dev = [
   "pytest>=8.0",

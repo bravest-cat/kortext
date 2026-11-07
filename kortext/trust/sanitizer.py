@@ -50,6 +50,16 @@ def normalize_for_security_scan(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", no_zw).strip()
 
 
+def redact_secrets(text: str) -> str:
+    """Replaces secret or credential-like tokens with [REDACTED]."""
+    if not text:
+        return ""
+    result = str(text)
+    for pattern in SECRET_PATTERNS:
+        result = pattern.sub("[REDACTED]", result)
+    return result
+
+
 INJECTION_PATTERNS = [
     r"(?i)ignore\s+(all\s+)?(previous|prior)\s+(instructions|directives|prompts)",
     r"(?i)disregard\s+(all\s+)?(previous|prior)\s+(instructions|directives|prompts)",

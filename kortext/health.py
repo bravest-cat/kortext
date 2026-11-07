@@ -414,6 +414,26 @@ async def audit_kortext_health(
         "kortext_dashboard": dash_res["status_display"],
     }
 
+    try:
+        from kortext.embeddings import _FASTEMBED_PROVIDER_CACHE, _REMOTE_PROVIDER_CACHE
+        m_name = None
+        if _REMOTE_PROVIDER_CACHE:
+            m_name = next(iter(_REMOTE_PROVIDER_CACHE.values())).model_name
+        elif _FASTEMBED_PROVIDER_CACHE:
+            m_name = next(iter(_FASTEMBED_PROVIDER_CACHE.values())).model_name
+        else:
+            from kortext._env import get_embed_base_url, get_env
+            base_url = get_embed_base_url()
+            if base_url and base_url.lower() not in ("none", "disabled", "false", "0", "fastembed", "local"):
+                m_name = get_env("EMBED_MODEL_NAME") or "mlx-community--Qwen3-Embedding-8B-4bit-DWQ"
+        if m_name and "bge-small" not in m_name.lower():
+            report["episodic_threshold"] = (
+                f"uncalibrated (active embedder '{m_name}' is not bge-small; "
+                f"calibrated for BAAI/bge-small-en-v1.5)"
+            )
+    except Exception as exc:
+        logger.debug("Health audit embedder check failed: %s", exc)
+
     if include_invariants:
         if drift_err:
             report["invariants"] = f"⚠️ Check skipped ({type(drift_err).__name__}: {drift_err})"

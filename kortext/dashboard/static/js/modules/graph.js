@@ -5,7 +5,7 @@
 
 import { state } from './state.js';
 import * as api from './api.js';
-import { toast, escapeHtml, createVisTooltip } from './ui.js';
+import { toast, escapeHtml, createVisTooltip, renderErrorState, renderEmptyState } from './ui.js';
 import {
   initRelationshipPalette,
   toggleRelFilter,
@@ -163,9 +163,13 @@ export async function loadGraph() {
       largeBanner.classList.add('hidden');
     }
 
+    if (state.graph.allNodes.length === 0 && statsEl) {
+      statsEl.textContent = 'nothing indexed yet, run kortext init';
+    }
+
     applyGraphFilters();
   } catch (err) {
-    if (statsEl) statsEl.textContent = 'Failed to load graph';
+    if (statsEl) statsEl.textContent = 'Failed to load graph: ' + err.message;
     toast('Error loading graph: ' + err.message, 'error');
   }
 }

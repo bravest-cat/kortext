@@ -25,7 +25,11 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+import urllib.request
+from urllib.parse import urlparse
+
+import portalocker
 
 from dotenv import load_dotenv
 from fastmcp import Context, FastMCP
@@ -55,9 +59,12 @@ from kortext.server_helpers import (
     _filter_untrusted_injection_chunks,
     _format_federated_markdown,
     _validate_index_path,
+    enforce_reply_size_limit,
+    extract_root_conversation_id,
 )
 from kortext.symbols.graph import SymbolGraphManager
 from kortext.trust.sanitizer import CausalSanitizer, SecurityViolation
+from kortext.vault import generate_memory_index, resolve_memory_dir
 
 # ── Singletons & Concurrency Guards (shared across tool calls) ─────────────
 
@@ -68,8 +75,7 @@ symbol_graph = SymbolGraphManager()
 _ACTIVE_INDEX_TASKS: set[asyncio.Task[Any]] = set()
 _COLLECTION_INDEX_LOCKS: Dict[str, asyncio.Lock] = {}
 
-JOURNAL_DIR = Path(os.getenv("JOURNAL_DIR", str(KORTEXT_ROOT / "journal")))
-JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+JOURNAL_DIR: Optional[Union[Path, str]] = None
 HANDOFFS_DIR = get_kortext_home() / "handoffs"
 HANDOFFS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -219,6 +225,34 @@ mcp = FastMCP(
 )
 
 
+def _record_tool_savings(
+    event: str,
+    reply_str: str,
+    ctx: Optional[Context] = None,
+    workspace_root: Optional[str] = None,
+    project: Optional[str] = None,
+) -> None:
+    """Records a lightweight savings event from tool output. Cheap and never raises."""
+    try:
+        from kortext.savings import extract_files_and_sizes_from_reply, record_savings_event
+        from kortext.server_helpers import extract_root_conversation_id
+
+        ws = Path(workspace_root) if workspace_root else None
+        file_bytes, files = extract_files_and_sizes_from_reply(reply_str, workspace_root=ws)
+        reply_bytes = len(reply_str.encode("utf-8"))
+        conv_id = extract_root_conversation_id(ctx) or ""
+        record_savings_event(
+            event=event,
+            session_id=conv_id,
+            project=project or "kortext",
+            reply_bytes=reply_bytes,
+            file_bytes=file_bytes,
+            files=files,
+        )
+    except Exception as exc:
+        logger.debug("Savings recording skipped for %s: %s", event, exc)
+
+
 # ── Tool 1: Retrieve ───────────────────────────────────────────────────────
 
 @mcp.tool(
@@ -237,6 +271,7 @@ async def search_knowledge_and_memory(
     detail_level: str = "balanced",
     project: Optional[str] = None,
     include_markdown: bool = False,
+    ctx: Optional[Context] = None,
 ) -> str:
     """
     Args:
@@ -247,6 +282,7 @@ async def search_knowledge_and_memory(
         detail_level:     Context detail level: 'compact', 'balanced', or 'comprehensive'.
         project:          Optional project scope, e.g. 'kortext', 'my_app', or 'all' to query across all projects.
         include_markdown: If True, also includes a pre-rendered 'markdown' string alongside the JSON arrays (default False to avoid token duplication).
+        ctx:              Optional FastMCP request context.
     Returns:
         Compact JSON envelope with 4 in-budget memory tiers (Tier 0: symbolic_context,
         Tier 1: code_chunks, Tier 2: episodic_history, Tier 3: architectural_overview) and total_estimated_tokens.
@@ -266,14 +302,56 @@ async def search_knowledge_and_memory(
     res_copy = _filter_untrusted_injection_chunks(res)
     if include_markdown:
         res_copy["markdown"] = _format_federated_markdown(res_copy, query=query, token_budget=token_budget)
-    return json.dumps(res_copy, separators=(",", ":"))
+    res_str = enforce_reply_size_limit(res_copy, item_keys=["code_chunks", "episodic_history", "symbols", "symbolic_context"])
+    _record_tool_savings("search_knowledge_and_memory", res_str, ctx=ctx, workspace_root=workspace_root, project=project)
+    return res_str
 
 
 # ── Tool 2: Record ─────────────────────────────────────────────────────────
 
+async def _discover_workspace_root(
+    workspace_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    Validates explicit workspace_root or queries MCP client roots via ctx.session.list_roots().
+    Returns (resolved_workspace_root, warning_message).
+    """
+    warning: Optional[str] = None
+    if workspace_root:
+        try:
+            cand = Path(workspace_root).expanduser().resolve()
+            if cand.is_dir():
+                return str(cand), None
+            else:
+                warning = f"Warning: workspace_root '{workspace_root}' is not an existing directory; ignoring."
+        except Exception as e:
+            warning = f"Warning: workspace_root '{workspace_root}' is invalid ({e}); ignoring."
+
+    if ctx is not None:
+        session = getattr(ctx, "session", None)
+        if session and hasattr(session, "list_roots"):
+            try:
+                roots_res = await asyncio.wait_for(session.list_roots(), timeout=2.0)
+                roots_list = getattr(roots_res, "roots", None) or []
+                for r in roots_list:
+                    raw_uri = getattr(r, "uri", None) or (r if isinstance(r, str) else None)
+                    if raw_uri and isinstance(raw_uri, str) and raw_uri.startswith("file://"):
+                        parsed = urlparse(raw_uri)
+                        path_str = urllib.request.url2pathname(parsed.path)
+                        cand = Path(path_str).expanduser().resolve()
+                        if cand.is_dir():
+                            return str(cand), warning
+            except Exception as exc:
+                logger.debug("Client roots discovery failed or timed out: %s", exc)
+
+    return None, warning
+
+
 @mcp.tool(
     description=(
         "Record a significant technical decision, configuration change, or work outcome. "
+        "Agents should pass workspace_root, the absolute path of the current workspace, so memory lands in the project vault. "
         "Persists to: (1) FalkorDB episodic knowledge graph directly without intermediate LLM proxy, "
         "and (2) a dated Markdown journal file for human-readable audit trail. Old conflicting facts "
         "are superseded, not deleted."
@@ -291,6 +369,7 @@ async def record_system_outcome(
     supersedes: Optional[list[str]] = None,
     trust_level: str = "speculative",
     ctx: Optional[Context] = None,
+    workspace_root: Optional[str] = None,
 ) -> str:
     """
     Args:
@@ -304,22 +383,11 @@ async def record_system_outcome(
         supersedes:   Optional list of patterns/facts superseded by this outcome
         trust_level:  Trust anchor level: 'speculative' (0.50), 'tool_confirmed' (0.60), 'verified' (0.80), 'user_approved' (1.00), or 'system' (1.00)
         ctx:          Optional FastMCP request context carrying Antigravity metadata (_meta['antigravity.google/root_conversation_id']).
+        workspace_root: Absolute path of current workspace. Agents should pass this so memory lands in the project vault.
     Returns:
         Confirmation with paths to KG and journal.
     """
-    root_conv_id: Optional[str] = None
-    if ctx is not None:
-        try:
-            req_ctx = getattr(ctx, "request_context", None)
-            meta = getattr(req_ctx, "meta", None)
-            if isinstance(meta, dict):
-                root_conv_id = meta.get("antigravity.google/root_conversation_id")
-            elif meta is not None:
-                root_conv_id = getattr(meta, "root_conversation_id", None) or getattr(
-                    getattr(meta, "model_extra", {}), "get", lambda *_: None
-                )("antigravity.google/root_conversation_id")
-        except Exception:
-            root_conv_id = None
+    root_conv_id = extract_root_conversation_id(ctx)
     if root_conv_id:
         tags = list(tags or [])
         conv_tag = f"root_conv:{root_conv_id}"
@@ -388,12 +456,21 @@ async def record_system_outcome(
     except SecurityViolation as sv:
         return f"🚨 BLOCKED BY MINJA CAUSAL SANITIZER: {sv}. Write operation rejected and quarantined."
 
+    # Discover and validate workspace root
+    valid_ws_root, ws_warning = await _discover_workspace_root(workspace_root=workspace_root, ctx=ctx)
+    workspace_root = valid_ws_root
+
+    if JOURNAL_DIR is not None:
+        target_memory_dir = Path(JOURNAL_DIR).expanduser().resolve()
+    else:
+        target_memory_dir = resolve_memory_dir(workspace_root=workspace_root, project=project)
+
     safe_title = re.sub(r"[^\w\-]+", "_", episode_name.strip().lower()).strip("_") or "outcome"
     today = datetime.now().strftime("%Y-%m-%d")
     now_time = datetime.now().strftime("%H:%M")
 
     cat_dir_name = CATEGORY_DIRS[cat]
-    category_dir = JOURNAL_DIR / cat_dir_name
+    category_dir = target_memory_dir / cat_dir_name
     outcome_file = category_dir / f"{today}_{safe_title}.md"
 
     outcome_lines = [
@@ -410,7 +487,7 @@ async def record_system_outcome(
     outcome_lines.extend(["\n## Outcome Description\n", full_content, "\n"])
     outcome_content = "\n".join(outcome_lines)
 
-    journal_file = JOURNAL_DIR / f"{today}.md"
+    journal_file = target_memory_dir / f"{today}.md"
     entry_lines = [f"\n## {now_time} - {episode_name}\n", full_content]
     entry_lines.append(f"\n**Category:** {cat}")
     if tags:
@@ -427,8 +504,19 @@ async def record_system_outcome(
         category_dir.mkdir(parents=True, exist_ok=True)
         with open(outcome_file, "w", encoding="utf-8") as f:
             f.write(outcome_content)
-        with open(journal_file, "a", encoding="utf-8") as f:
-            f.write("\n".join(entry_lines))
+        lock_file = target_memory_dir / ".journal.lock"
+        try:
+            with portalocker.Lock(str(lock_file), timeout=1.0):
+                with open(journal_file, "a", encoding="utf-8") as f:
+                    f.write("\n".join(entry_lines))
+                try:
+                    generate_memory_index(target_memory_dir, project=project)
+                except Exception as exc:
+                    logger.debug("Failed to generate memory index in record_system_outcome: %s", exc)
+        except portalocker.exceptions.BaseLockException:
+            logger.debug("Daily journal lock timed out in record_system_outcome; appending directly")
+            with open(journal_file, "a", encoding="utf-8") as f:
+                f.write("\n".join(entry_lines))
 
     await asyncio.to_thread(_write_journal)
 
@@ -453,12 +541,15 @@ async def record_system_outcome(
     except Exception as e:
         kg_status = f"⚠️ FalkorDB KG skipped ({type(e).__name__}: {e})"
 
-    return (
+    res_text = (
         f"✅ Recorded: '{episode_name}'\n"
         f"   → Category: {outcome_file}\n"
         f"   → Journal: {journal_file}\n"
         f"   → {kg_status}"
     )
+    if ws_warning:
+        res_text = f"{ws_warning}\n{res_text}"
+    return res_text
 
 
 # ── Tool 3: Dream Mode ─────────────────────────────────────────────────────
@@ -754,6 +845,7 @@ async def trace_symbol_impact(
     symbols_graph: Optional[str] = None,
     token_budget: Optional[int] = 1500,
     symbol_name: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> str:
     """
     Args:
@@ -763,6 +855,7 @@ async def trace_symbol_impact(
         symbols_graph: Optional FalkorDB graph name (defaults to 'kortext_symbols').
         token_budget:  Optional max tokens for the response (default: 1500).
         symbol_name:   Optional alias for `symbol`.
+        ctx:           Optional FastMCP request context.
     Returns:
         Compact JSON report showing in-budget impacted files, lines, relationships, and progressive summary.
     """
@@ -776,7 +869,9 @@ async def trace_symbol_impact(
         impact = mgr.trace_symbol_impact(target_symbol, direction=direction, max_depth=max_depth, token_budget=token_budget)
         return json.dumps(impact, separators=(",", ":"))
 
-    return await asyncio.to_thread(_do_trace)
+    res_str = await asyncio.to_thread(_do_trace)
+    _record_tool_savings("trace_symbol_impact", res_str, ctx=ctx)
+    return res_str
 
 
 # ── Tool 8: Anti-Ripgrep Deterministic Symbol Seek ───────────────────────
@@ -793,6 +888,7 @@ async def seek_symbol(
     symbol_name: str,
     detail_level: str = "skeleton",
     file_hint: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> str:
     """
     Args:
@@ -800,6 +896,7 @@ async def seek_symbol(
         detail_level: Progressive detail level: 'skeleton' (signature, docstring, types, stubbed body),
                       'interface' (skeleton + callers, callees, methods), or 'full' (complete implementation).
         file_hint: Optional filename or path substring to disambiguate identical symbols.
+        ctx:       Optional FastMCP request context.
     Returns:
         Structured JSON declaration and immediate call graph.
     """
@@ -808,10 +905,14 @@ async def seek_symbol(
 
         seeker = SymbolSeekEngine()
         if detail_level != "skeleton":
-            return seeker.seek_symbol(symbol_name, detail_level=detail_level, file_hint=file_hint)
-        return seeker.seek_symbol(symbol_name, file_hint=file_hint)
+            raw_res = seeker.seek_symbol(symbol_name, detail_level=detail_level, file_hint=file_hint)
+        else:
+            raw_res = seeker.seek_symbol(symbol_name, file_hint=file_hint)
+        return enforce_reply_size_limit(raw_res, item_keys=["matches"])
 
-    return await asyncio.to_thread(_do_seek)
+    res_str = await asyncio.to_thread(_do_seek)
+    _record_tool_savings("seek_symbol", res_str, ctx=ctx)
+    return res_str
 
 
 # ── Tool 9: Task DAG Project Management Engine ───────────────────────────
@@ -886,6 +987,8 @@ async def memory_session_handoff(
     unresolved_questions: Optional[list[str]] = None,
     active_blast_radius: Optional[list[str]] = None,
     baton_id: Optional[str] = None,
+    root_conversation_id: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> str:
     """
     Args:
@@ -896,9 +999,12 @@ async def memory_session_handoff(
         unresolved_questions: List of open questions or blockers.
         active_blast_radius:  List of modified or impacted files/symbols.
         baton_id:             Specific baton ID to read or mark completed.
+        root_conversation_id: Optional root conversation identifier to scope handoffs.
+        ctx:                  Optional FastMCP request context carrying Antigravity metadata.
     Returns:
         Formatted confirmation or JSON baton payload.
     """
+    conv_id = root_conversation_id or extract_root_conversation_id(ctx)
     def _do_handoff() -> str:
         manager = HandoffManager(HANDOFFS_DIR)
         return manager.execute(
@@ -909,6 +1015,7 @@ async def memory_session_handoff(
             unresolved_questions=unresolved_questions,
             active_blast_radius=active_blast_radius,
             baton_id=baton_id,
+            root_conversation_id=conv_id,
         )
 
     return await asyncio.to_thread(_do_handoff)
@@ -1089,6 +1196,32 @@ async def boost_prompt_context(
         return json.dumps(brief, separators=(",", ":"))
 
     return await asyncio.to_thread(_do_boost)
+
+
+# ── Tool 12: Affected Tests Finder ─────────────────────────────────────
+
+@mcp.tool(
+    description=(
+        "Find tests affected by git changes against base branch or commit using static AST call graph. "
+        "Limit: static call graph only, so dynamic dispatch and fixtures can be missed."
+    ),
+    meta={"antigravity/alwaysLoad": False},
+)
+async def find_affected_tests(
+    workspace_root: str,
+    base: str = "HEAD",
+) -> str:
+    """
+    Args:
+        workspace_root: Workspace root directory path.
+        base:           Git base commit or branch to diff against (default 'HEAD').
+    Returns:
+        JSON payload with affected test files, test functions, and ready-to-run test command.
+    """
+    from kortext.affected import find_affected_tests as _do_find
+
+    res = await asyncio.to_thread(_do_find, workspace_root=workspace_root, base=base)
+    return json.dumps(res, separators=(",", ":"))
 
 
 def main():

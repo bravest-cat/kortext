@@ -93,6 +93,8 @@ def cmd_start(args):
 
 def cmd_stop(args):
     """Stops native FalkorDB and embedded substrates cross-platform."""
+    from kortext import daemon
+    daemon.stop()
     import platform
     if platform.system() == "Windows":
         from kortext.setup import stop_substrates
@@ -137,6 +139,167 @@ def cmd_impact(args):
         except Exception:
             logger.debug("Suppressed non-fatal exception")
     print(result)
+
+
+def cmd_init(args):
+    """One-command initialization replacing setup, install, start, and index."""
+    from kortext._home import get_kortext_home
+    from kortext.setup import (
+        provision_directories,
+        provision_configurations,
+        provision_binaries,
+        start_substrates,
+        run_diagnostics,
+    )
+    from kortext.ingest import run_cli_ingest
+
+    target_path = Path(getattr(args, "path", None) or os.getcwd()).resolve()
+    skip_binaries = getattr(args, "skip_binaries", False)
+    no_plugin = getattr(args, "no_plugin", False)
+
+    # 1. Setup
+    diag = run_diagnostics()
+    if not diag.python_compatible:
+        print(f"Setup failed: Python {diag.python_version} is unsupported. Python >= 3.10 is required. Upgrade Python to continue.")
+        sys.exit(1)
+
+    home = get_kortext_home()
+    provision_directories(home)
+    provision_configurations(home)
+    if not skip_binaries:
+        try:
+            provision_binaries(home)
+        except Exception as exc:
+            logger.debug("Binary provisioning note: %s", exc)
+    print(f"Step 1/4: Setup complete (directories and configuration at {home}).")
+
+    # 2. Install plugin
+    if no_plugin:
+        print("Step 2/4: Plugin install skipped (--no-plugin).")
+    else:
+        try:
+            from scripts.install_plugin import install_plugin, _enable_plugin_sidecars
+            install_plugin()
+            _enable_plugin_sidecars(Path.home() / ".gemini")
+            print("Step 2/4: Plugin installed and synchronized to ~/.gemini.")
+        except Exception as exc:
+            print(f"Plugin install failed: {exc}. Fix: run 'kortext install' manually or inspect permissions.")
+            sys.exit(1)
+
+    # 3. Start substrates
+    try:
+        success, msg = start_substrates(home)
+        print(f"Step 3/4: Substrates running ({msg}).")
+    except Exception as exc:
+        print(f"Substrate start failed: {exc}. Fix: run 'kortext start' or check redis-server.")
+        sys.exit(1)
+
+    # 4. Index target
+    try:
+        print("Indexing workspace... The first index can take several minutes.")
+        run_cli_ingest(str(target_path), force=False)
+        print(f"Step 4/4: Indexed workspace at {target_path}.")
+    except Exception as exc:
+        print(f"Indexing failed: {exc}. Fix: run 'kortext index {target_path} --force' after checking substrates.")
+        sys.exit(1)
+
+    print()
+    print(f"Kortext initialization complete for {target_path}.")
+    print("Next steps:")
+    print("  - Run 'kortext doctor' to diagnose system health.")
+    print("  - Run 'kortext seek <symbol>' to inspect symbol declarations.")
+    print("  - Run 'kortext affected' to check test impact of changes.")
+    print("  - Start visual dashboard with 'kortext dashboard'.")
+
+
+def cmd_doctor(args):
+    """Diagnoses an install across substrates, plugin, cache, and agy."""
+    from kortext.doctor import run_doctor, format_doctor_report
+
+    output_json = getattr(args, "json", False)
+    checks = run_doctor()
+
+    if output_json:
+        print(json.dumps(checks, indent=2))
+    else:
+        print(format_doctor_report(checks))
+
+    has_failure = any(c.get("status") == "fail" for c in checks)
+    if has_failure:
+        sys.exit(1)
+
+
+def cmd_savings(args):
+    """Report token savings telemetry and upper-bound savings estimate."""
+    from kortext.savings import get_savings_summary
+
+    days = getattr(args, "days", 30) or 30
+    project = getattr(args, "project", None)
+    summary = get_savings_summary(days=days, project=project)
+
+    output_json = getattr(args, "json", False)
+    if output_json:
+        print(json.dumps(summary, indent=2))
+        return
+
+    proj_label = f" for project '{project}'" if project else ""
+    print(f"=== Kortext Token Savings Report (Last {days} days{proj_label}) ===")
+    counts = summary.get("counts_by_kind") or {}
+    if counts:
+        print("Counts by kind:")
+        for kind, cnt in sorted(counts.items()):
+            print(f"  - {kind}: {cnt}")
+    else:
+        print("Counts by kind: None recorded")
+    print(f"Reply bytes served: {summary.get('reply_bytes_served', 0):,} bytes")
+    print(f"ESTIMATE tokens saved: {summary.get('estimate_tokens_saved', 0):,} tokens")
+    print("Note: This ESTIMATE assumes the agent would otherwise have read those files whole, so it is an upper bound.")
+
+
+def cmd_affected(args):
+    """Find tests affected by git changes against base commit/branch."""
+    from kortext.affected import find_affected_tests
+
+    base = getattr(args, "base", "HEAD") or "HEAD"
+    root = getattr(args, "root", None)
+    res = find_affected_tests(workspace_root=root, base=base)
+
+    output_json = getattr(args, "json", False)
+    if output_json:
+        print(json.dumps(res, indent=2))
+        return
+
+    if not res.get("complete"):
+        print("Affected tests (INCOMPLETE - run full test suite):")
+        print(f"Reason: {res.get('reason')}")
+        if res.get("test_files"):
+            print("Partially identified test files:")
+            for tf in res["test_files"]:
+                print(f"  - {tf}")
+        print(f"Suggested command: {res.get('command')}")
+        return
+
+    test_files = res.get("test_files") or []
+    if not test_files:
+        print("No affected tests identified for these changes.")
+        return
+
+    print("Affected tests:")
+    for item in res.get("affected_tests", []):
+        f = item.get("file")
+        funcs = item.get("functions") or []
+        print(f"  {f}:")
+        if funcs:
+            for fn in funcs:
+                print(f"    - {fn}")
+        else:
+            print("    - (whole file)")
+
+    cmd = res.get("command")
+    if cmd:
+        print()
+        print("Ready-to-run command:")
+        print(f"  {cmd}")
 
 
 def cmd_dream(args):
@@ -295,12 +458,48 @@ def cmd_watch(args):
         asyncio.run(start_watcher(watch_root=root, collection=coll))
 
 
-def main():
+def cmd_benchmark(args):
+    """Run AST and vector benchmark suite against FalkorDB."""
+    from kortext.benchmarks.runner import run_benchmark
+    run_benchmark(
+        root=getattr(args, "root", None),
+        k=getattr(args, "k", 3),
+        out_path=getattr(args, "out", None),
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kortext",
         description="Kortext Knowledge OS: Cognitive Memory Hierarchy, AST Intelligence & Anti-Ripgrep Engine",
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+
+    # init
+    p_init = subparsers.add_parser("init", help="One-command initialization (setup, install, start, index)")
+    p_init.add_argument("path", nargs="?", default=".", help="Workspace path to initialize and index (default: '.')")
+    p_init.add_argument("--no-plugin", action="store_true", help="Skip Antigravity plugin installation")
+    p_init.add_argument("--skip-binaries", action="store_true", help="Skip downloading substrate binaries")
+    p_init.set_defaults(func=cmd_init)
+
+    # doctor
+    p_doctor = subparsers.add_parser("doctor", help="Diagnose Kortext installation health")
+    p_doctor.add_argument("--json", action="store_true", help="Output diagnostic report in JSON format")
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    # savings
+    p_savings = subparsers.add_parser("savings", help="Report token savings telemetry and estimates")
+    p_savings.add_argument("--days", type=int, default=30, help="Number of trailing days to inspect (default: 30)")
+    p_savings.add_argument("--project", default=None, help="Filter savings by project name")
+    p_savings.add_argument("--json", action="store_true", help="Output savings summary in JSON format")
+    p_savings.set_defaults(func=cmd_savings)
+
+    # affected
+    p_affected = subparsers.add_parser("affected", help="Find tests affected by git changes")
+    p_affected.add_argument("--base", default="HEAD", help="Base commit or branch to diff against (default: HEAD)")
+    p_affected.add_argument("--root", default=None, help="Root directory path (default: cwd)")
+    p_affected.add_argument("--json", action="store_true", help="Output affected tests in JSON format")
+    p_affected.set_defaults(func=cmd_affected)
 
     # setup
     p_setup = subparsers.add_parser("setup", help="Interactive guided setup wizard for zero-docker onboarding")
@@ -342,7 +541,7 @@ def main():
     # dream
     p_dream = subparsers.add_parser("dream", help="Trigger Cognitive Dream Mode")
     p_dream.add_argument("--project", default="kortext", help="Project label")
-    p_dream.add_argument("--purge-stale", action="store_true", default=True, help="Purge stale facts")
+    p_dream.add_argument("--purge-stale", action=argparse.BooleanOptionalAction, default=True, help="Purge stale facts")
     p_dream.add_argument("--dry-run", action="store_true", help="Preview without modifying")
     p_dream.set_defaults(func=cmd_dream)
 
@@ -416,11 +615,47 @@ def main():
     p_boost.add_argument("--json", action="store_true", help="Output full JSON payload instead of boosted prompt markdown")
     p_boost.set_defaults(func=cmd_boost)
 
+    # memory
+    def cmd_memory_rebuild(args):
+        from kortext.scripts.sync_journal import sync_journal
+        root_path = Path(args.root).resolve() if args.root else None
+        asyncio.run(sync_journal(root=root_path, dry_run=args.dry_run))
+
+    def cmd_memory_index(args):
+        from kortext.vault import generate_memory_index, resolve_memory_dir
+        root_path = Path(args.root).resolve() if args.root else resolve_memory_dir()
+        idx_path = generate_memory_index(root_path)
+        print(f"Memory index generated: {idx_path}")
+
+    p_memory = subparsers.add_parser("memory", help="Memory vault utilities (rebuild, index)")
+    p_mem_subs = p_memory.add_subparsers(dest="memory_subcommand", required=True)
+
+    p_mem_rebuild = p_mem_subs.add_parser("rebuild", help="Rebuild FalkorDB episodic memory from Markdown journals")
+    p_mem_rebuild.add_argument("--root", default=None, help="Root path of memory vault / journals")
+    p_mem_rebuild.add_argument("--dry-run", action="store_true", help="Inspect entries without persisting to FalkorDB")
+    p_mem_rebuild.set_defaults(func=cmd_memory_rebuild)
+
+    p_mem_index = p_mem_subs.add_parser("index", help="Regenerate INDEX.md in memory vault")
+    p_mem_index.add_argument("--root", default=None, help="Root path of memory vault / journals")
+    p_mem_index.set_defaults(func=cmd_memory_index)
+
+    # benchmark
+    p_bench = subparsers.add_parser("benchmark", help="Run AST and vector benchmark suite against FalkorDB")
+    p_bench.add_argument("--root", default=None, help="Root directory path to index and benchmark (default: repo root)")
+    p_bench.add_argument("--k", type=int, default=3, help="Number of repetitions per task for pass@k / pass^k (default: 3)")
+    p_bench.add_argument("--out", default=None, help="Output path for benchmark results JSON (default: data/benchmark_results.json)")
+    p_bench.set_defaults(func=cmd_benchmark)
+
     # help
     p_help = subparsers.add_parser("help", help="Show this help message")
     p_help.set_defaults(func=lambda _: parser.print_help())
 
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if not args.command:
         parser.print_help()
         sys.exit(0)

@@ -5,7 +5,7 @@
 
 import { state } from './state.js';
 import * as api from './api.js';
-import { toast, escapeHtml, openModal, closeModal } from './ui.js';
+import { toast, escapeHtml, openModal, closeModal, renderErrorState, renderEmptyState } from './ui.js';
 
 export async function loadJournal() {
   const container = document.getElementById('journal-timeline');
@@ -14,10 +14,15 @@ export async function loadJournal() {
   try {
     const data = await api.getJournal();
     state.journal.allEntries = data.entries || [];
+    if (state.journal.allEntries.length === 0) {
+      if (container) renderEmptyState(container, 'nothing indexed yet, run kortext init');
+      updateCategoryChipsCounts();
+      return;
+    }
     updateCategoryChipsCounts();
     applyJournalFilters();
   } catch (err) {
-    if (container) container.innerHTML = '<div class="text-rose-400 py-8 text-center text-xs font-mono">Failed to load journal.</div>';
+    if (container) renderErrorState(container, err.message, loadJournal);
     toast('Failed to load journal: ' + err.message, 'error');
   }
 }

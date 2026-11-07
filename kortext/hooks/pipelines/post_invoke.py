@@ -111,8 +111,15 @@ class TokenUsageTracker:
                 t_args = tc.get("args") or {}
                 if not isinstance(t_args, (dict, MappingProxyType)):
                     continue
-                if t_name in ("write_to_file", "replace_file_content", "multi_replace_file_content"):
-                    tf = t_args.get("TargetFile") or t_args.get("target_file") or t_args.get("path")
+                if t_name in ("write_to_file", "replace_file_content", "multi_replace_file_content", "write_file", "edit_file"):
+                    tf = (
+                        t_args.get("Path")
+                        or t_args.get("TargetFile")
+                        or t_args.get("target_file")
+                        or t_args.get("path")
+                        or t_args.get("file_path")
+                        or t_args.get("filePath")
+                    )
                     if tf and str(tf) not in modified_files:
                         modified_files.append(str(tf))
                 elif "seek_symbol" in t_name or "trace_symbol_impact" in t_name:
@@ -156,6 +163,7 @@ class TokenUsageTracker:
                 raw_payload=context.raw_payload,
                 transcript_path=context.transcript_path,
                 model_name=context.model_name,
+                session_id=getattr(context, "conversation_id", "") or context.session_id,
             )
             used_pct = token_state.used_percentage
             record = {

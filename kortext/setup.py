@@ -192,7 +192,7 @@ def run_diagnostics(base_dir: Optional[Path] = None) -> SetupDiagnostics:
 
 
 def provision_directories(base_dir: Optional[Path] = None) -> List[Path]:
-    """Provisions canonical Kortext home directories including the 8-category journal taxonomy."""
+    """Provisions canonical Kortext home directories."""
     root = base_dir or get_kortext_home()
     dirs = [
         root / "run",
@@ -202,15 +202,6 @@ def provision_directories(base_dir: Optional[Path] = None) -> List[Path]:
         root / "qdrant",
         root / "data" / "falkordb",
         root / "data" / "qdrant_storage",
-        root / "journal" / "decisions",
-        root / "journal" / "roadmaps",
-        root / "journal" / "implementations",
-        root / "journal" / "experiments",
-        root / "journal" / "benchmarks",
-        root / "journal" / "investigations",
-        root / "journal" / "research",
-        root / "journal" / "reports",
-        root / "journal" / "dreams",
     ]
     created = []
     for d in dirs:
@@ -409,7 +400,7 @@ def run_guided_setup(
     print("2. Provisioning Storage & Directories:")
     print(f"   • Kortext Home     : {diag.kortext_home}")
     provision_directories(Path(diag.kortext_home))
-    print("   • Sub-directories  : run/, data/, logs/, config/, bin/, qdrant/, journal/ (8 taxonomy categories) ✅")
+    print("   • Sub-directories  : run/, data/, logs/, config/, bin/, qdrant/ [OK]")
 
     # Step 3: Python Dependencies Verification
     print()

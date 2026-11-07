@@ -369,6 +369,15 @@ class AntiRipgrepGate:
                     f"Use `seek_symbol(symbol_name='{sym}')` for deterministic AST point lookup (<2ms, <150 tokens) "
                     f"or `trace_symbol_impact` to preserve context tokens.{hint}"
                 )
+                try:
+                    from kortext.savings import record_savings_event
+                    record_savings_event(
+                        event="grep_denied",
+                        session_id=context.session_id or "",
+                        project=context.workspace_project or "kortext",
+                    )
+                except Exception:
+                    pass
                 return InterceptorResult.deny(reason=reason)
             return InterceptorResult.allow()
 
@@ -427,6 +436,15 @@ class AntiRipgrepGate:
                 f"Use `seek_symbol(symbol_name='{sym}')` for deterministic AST point lookup (<2ms, <150 tokens) "
                 f"or `trace_symbol_impact` to preserve context tokens and prevent context degradation.{hint}"
             )
+            try:
+                from kortext.savings import record_savings_event
+                record_savings_event(
+                    event="grep_denied",
+                    session_id=context.session_id or "",
+                    project=context.workspace_project or "kortext",
+                )
+            except Exception:
+                pass
             return InterceptorResult.deny(reason=reason)
 
         return InterceptorResult.allow()
@@ -496,9 +514,9 @@ class SecretLeakGuard:
                             "Load secrets from environment variables instead."
                         )
 
-        if context.tool_name in ("write_to_file", "replace_file_content", "multi_replace_file_content"):
+        if context.tool_name in ("write_to_file", "replace_file_content", "multi_replace_file_content", "write_file", "edit_file"):
             args = context.tool_args
-            for field_name in ("CodeContent", "ReplacementContent", "ReplacementChunks", "code", "content", "Content"):
+            for field_name in ("CodeContent", "ReplacementContent", "ReplacementChunks", "code", "content", "Content", "Replacement"):
                 content = str(args.get(field_name, ""))
                 if content:
                     for pattern in SECRET_PATTERNS:
@@ -540,11 +558,11 @@ class BlastRadiusGuard:
 
     @classmethod
     def _is_trivial_comment_or_whitespace_edit(cls, context: HookContext) -> bool:
-        if context.tool_name != "replace_file_content":
+        if context.tool_name not in ("replace_file_content", "edit_file"):
             return False
         args = context.tool_args
-        old_txt = str(args.get("TargetContent") or "")
-        new_txt = str(args.get("ReplacementContent") or "")
+        old_txt = str(args.get("TargetContent") or args.get("Target") or "")
+        new_txt = str(args.get("ReplacementContent") or args.get("Replacement") or "")
         if not old_txt or not new_txt:
             return False
         return cls._strip_comments_and_ws(old_txt) == cls._strip_comments_and_ws(new_txt)
@@ -612,7 +630,7 @@ class BlastRadiusGuard:
             return True
 
     def check(self, context: HookContext) -> InterceptorResult:
-        if context.tool_name not in ("write_to_file", "replace_file_content", "multi_replace_file_content"):
+        if context.tool_name not in ("write_to_file", "replace_file_content", "multi_replace_file_content", "write_file", "edit_file"):
             return InterceptorResult.allow()
 
         target_file = context.target_file
@@ -714,7 +732,7 @@ class SensitivePathReadGuard:
     _SAFE_ENV_SUFFIXES = (".env.example", ".env.sample", ".env.template", ".env.test", ".env.defaults")
 
     def check(self, context: HookContext) -> InterceptorResult:
-        if context.tool_name in ("write_to_file", "replace_file_content", "multi_replace_file_content"):
+        if context.tool_name in ("write_to_file", "replace_file_content", "multi_replace_file_content", "write_file", "edit_file"):
             agent_role = str(
                 context.raw_payload.get("agent_name")
                 or context.raw_payload.get("subagent_type")
@@ -731,7 +749,7 @@ class SensitivePathReadGuard:
                             f"(attempted write to `{target}`)."
                         )
                     )
-        if context.tool_name == "view_file":
+        if context.tool_name in ("view_file", "read_file"):
             target = context.target_file
             if not target:
                 return InterceptorResult.allow()
@@ -763,7 +781,7 @@ class FileOwnershipGuard:
         own = os.getenv("KORTEXT_TASK_ID", "").strip()
         if not own or not context.target_file:
             return InterceptorResult.allow()
-        if context.tool_name not in ("write_to_file", "replace_file_content", "multi_replace_file_content"):
+        if context.tool_name not in ("write_to_file", "replace_file_content", "multi_replace_file_content", "write_file", "edit_file"):
             return InterceptorResult.allow()
         from kortext.tasks.orchestration_mixin import _as_list, _same_path
         from kortext.tasks.tracker import TaskDAGTracker

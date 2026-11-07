@@ -26,17 +26,12 @@ def test_get_kortext_home():
 
 def test_provision_directories(tmp_path):
     created = provision_directories(tmp_path)
-    assert len(created) >= 15
-    # Verify 8-category journal directories are created
-    categories = [
-        "decisions", "roadmaps", "implementations", "experiments",
-        "benchmarks", "investigations", "research", "reports", "dreams"
-    ]
-    for cat in categories:
-        cat_dir = tmp_path / "journal" / cat
-        assert cat_dir.is_dir(), f"Missing journal taxonomy dir: {cat}"
+    assert len(created) >= 7
     assert (tmp_path / "run").is_dir()
     assert (tmp_path / "logs").is_dir()
+    assert (tmp_path / "config").is_dir()
+    assert (tmp_path / "bin").is_dir()
+    assert (tmp_path / "qdrant").is_dir()
     assert (tmp_path / "data" / "falkordb").is_dir()
 
 
