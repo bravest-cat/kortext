@@ -93,6 +93,8 @@ def cmd_start(args):
 
 def cmd_stop(args):
     """Stops native FalkorDB and embedded substrates cross-platform."""
+    from kortext import daemon
+    daemon.stop()
     import platform
     if platform.system() == "Windows":
         from kortext.setup import stop_substrates

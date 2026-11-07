@@ -156,6 +156,16 @@ async def test_list_memories_schema_and_staleness():
         assert isinstance(m["stale"], bool)
         assert isinstance(m["stale_symbols"], list)
 
+    fact_memories = [m for m in memories if m["kind"] == "fact"]
+    assert fact_memories, "Expected at least one fact memory"
+    assert fact_memories[0]["superseded"] is False, "New fact memory must not be marked superseded"
+    assert fact_memories[0]["stale"] is False
+
+    ep_memories = [m for m in memories if m["kind"] == "episode"]
+    assert ep_memories, "Expected at least one episode memory"
+    assert ep_memories[0]["superseded"] is False, "New episode memory must not be marked superseded"
+    assert ep_memories[0]["stale"] is False
+
     try:
         r = client.get_redis()
         r.execute_command("GRAPH.DELETE", test_episodic_db)

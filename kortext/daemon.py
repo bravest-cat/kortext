@@ -116,22 +116,164 @@ class BearerGate:
         await self.app(scope, receive, send)
 
 
+def pid_file() -> Path:
+    return _run_dir() / "daemon.pid"
+
+
+def _write_pid_file() -> None:
+    pfile = pid_file()
+    pfile.write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+
+def _remove_pid_file() -> None:
+    try:
+        pfile = pid_file()
+        if pfile.is_file() and pfile.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            pfile.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def stop() -> bool:
+    """Terminates the daemon process if running and cleans up daemon.pid.
+
+    Returns True if a live daemon process was found and terminated, False otherwise.
+    """
+    pfile = pid_file()
+    if not pfile.is_file():
+        print("Kortext daemon is not running.")
+        return False
+
+    try:
+        raw = pfile.read_text(encoding="utf-8").strip()
+        pid = int(raw)
+    except (ValueError, OSError):
+        pfile.unlink(missing_ok=True)
+        print("Removed invalid daemon PID file.")
+        return False
+
+    if pid == os.getpid():
+        return False
+
+    try:
+        import psutil
+    except ImportError:
+        psutil = None
+
+    proc = None
+    is_live = False
+    is_kortext = False
+
+    if psutil is not None:
+        try:
+            proc = psutil.Process(pid)
+            if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
+                is_live = True
+                try:
+                    cmdline = proc.cmdline()
+                    cmd_str = " ".join(cmdline)
+                    if "kortext" in cmd_str:
+                        is_kortext = True
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    pass
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    else:
+        try:
+            os.kill(pid, 0)
+            is_live = True
+        except OSError:
+            is_live = False
+
+        if is_live and os.name == "posix":
+            proc_cmd = Path(f"/proc/{pid}/cmdline")
+            if proc_cmd.is_file():
+                try:
+                    raw_cmd = proc_cmd.read_bytes().replace(b"\x00", b" ").decode(errors="ignore")
+                    if "kortext" in raw_cmd:
+                        is_kortext = True
+                except OSError:
+                    pass
+
+    if not is_live:
+        pfile.unlink(missing_ok=True)
+        print(f"Kortext daemon is not running (cleaned up stale PID {pid}).")
+        return False
+
+    if not is_kortext:
+        pfile.unlink(missing_ok=True)
+        print(f"Stale daemon PID {pid} does not belong to kortext; not terminating.")
+        return False
+
+    import signal
+    try:
+        if proc is not None:
+            try:
+                proc.terminate()
+            except (psutil.NoSuchProcess, ProcessLookupError):
+                pass
+            else:
+                try:
+                    proc.wait(timeout=5)
+                except (psutil.TimeoutExpired, psutil.NoSuchProcess):
+                    try:
+                        proc.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+        else:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                    time.sleep(0.1)
+                except OSError:
+                    break
+            else:
+                if hasattr(signal, "SIGKILL"):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+        pfile.unlink(missing_ok=True)
+        print(f"Stopped kortext daemon (PID {pid}).")
+        return True
+    except Exception as exc:
+        pfile.unlink(missing_ok=True)
+        print(f"Failed to terminate kortext daemon (PID {pid}): {exc}")
+        return False
+
+
 def serve(mcp: Any) -> None:
     """Runs `mcp` as the daemon (blocking)."""
+    import atexit
     from starlette.middleware import Middleware
     from starlette.responses import JSONResponse
+
+    _write_pid_file()
+    atexit.register(_remove_pid_file)
 
     @mcp.custom_route("/health", methods=["GET"])
     async def _health(_request: Any) -> JSONResponse:
         return JSONResponse({"service": "kortext", "pid": os.getpid()})
 
-    mcp.run(
-        transport="http",
-        host=HOST,
-        port=port(),
-        show_banner=False,
-        middleware=[Middleware(BearerGate, secret=token())],
-    )
+    try:
+        mcp.run(
+            transport="http",
+            host=HOST,
+            port=port(),
+            show_banner=False,
+            middleware=[Middleware(BearerGate, secret=token())],
+        )
+    finally:
+        _remove_pid_file()
+        try:
+            atexit.unregister(_remove_pid_file)
+        except Exception:
+            pass
 
 
 def run_proxy() -> bool:

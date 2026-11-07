@@ -25,6 +25,19 @@ from kortext.trust.sanitizer import CausalSanitizer, fence_memory_by_provenance
 logger = logging.getLogger(__name__)
 
 
+def _parse_bool(val: Any) -> bool:
+    """Parses boolean values safely across client string and native representations."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, (bytes, bytearray)):
+        val = val.decode("utf-8", errors="ignore")
+    if isinstance(val, str):
+        return val.strip().lower() in ("true", "1", "yes", "t")
+    return bool(val)
+
+
 _STOPWORDS = frozenset({
     "the", "and", "for", "with", "from", "that", "this", "what", "where", "when", "which", "who",
     "whom", "whose", "how", "why", "are", "was", "were", "has", "have", "had", "does", "did", "can",
@@ -1179,7 +1192,7 @@ class AgentNativeEpisodicDriver:
                 "project": str(proj or "kortext"),
                 "trust_level": str(trust or "tool_confirmed"),
                 "created_at": str(created_at or ""),
-                "superseded": bool(superseded),
+                "superseded": _parse_bool(superseded),
                 "_grounded_str": str(grounded_str or ""),
             })
 
@@ -1193,7 +1206,7 @@ class AgentNativeEpisodicDriver:
                 "project": str(proj or "kortext"),
                 "trust_level": str(trust or "speculative"),
                 "created_at": str(created_at or ""),
-                "superseded": bool(superseded),
+                "superseded": _parse_bool(superseded),
                 "_grounded_str": str(grounded_str or ""),
             })
 
@@ -1229,7 +1242,7 @@ class AgentNativeEpisodicDriver:
                 "trust_level": item["trust_level"],
                 "created_at": item["created_at"],
                 "superseded": item["superseded"],
-                "stale": bool(is_stale),
+                "stale": _parse_bool(is_stale),
                 "stale_symbols": list(stale_syms),
             })
         return results

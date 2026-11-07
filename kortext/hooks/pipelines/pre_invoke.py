@@ -635,6 +635,8 @@ class MemoryIndexLoader:
 
         # Fence as unverified data
         fenced = fence_memory_by_provenance(capped_content, trust_level="speculative", source_tier=3)
+        if "[end of unverified memory]" not in fenced:
+            fenced = f"{fenced.rstrip()}\n[end of unverified memory]"
 
         inject_steps = ({"ephemeralMessage": fenced},)
         return InterceptorResult.allow(
@@ -667,7 +669,8 @@ class PreInvokePipeline:
 
     def execute(self, context: HookContext) -> InterceptorResult:
         merged_data: Dict[str, Any] = {}
-        ephemeral_messages: List[str] = []
+        trusted_messages: List[str] = []
+        memory_index_messages: List[str] = []
         other_steps: List[Dict[str, Any]] = []
 
         for interceptor in self.interceptors:
@@ -687,33 +690,50 @@ class PreInvokePipeline:
                 if res.data:
                     for k, v in res.data.items():
                         if k == "injectSteps" and isinstance(v, (list, tuple)):
+                            is_mem_loader = isinstance(interceptor, MemoryIndexLoader)
                             for step in v:
                                 if isinstance(step, (dict, MappingProxyType)) and "ephemeralMessage" in step:
                                     msg_txt = str(step["ephemeralMessage"]).strip()
-                                    if msg_txt and msg_txt not in ephemeral_messages:
-                                        ephemeral_messages.append(msg_txt)
+                                    if not msg_txt:
+                                        continue
+                                    if (
+                                        is_mem_loader
+                                        or step.get("is_memory_index")
+                                        or msg_txt.startswith("[unverified memory")
+                                    ):
+                                        if "[end of unverified memory]" not in msg_txt:
+                                            msg_txt = f"{msg_txt.rstrip()}\n[end of unverified memory]"
+                                        if msg_txt not in memory_index_messages:
+                                            memory_index_messages.append(msg_txt)
+                                    else:
+                                        if msg_txt not in trusted_messages:
+                                            trusted_messages.append(msg_txt)
                                 elif isinstance(step, (dict, MappingProxyType)):
-                                    other_steps.append(dict(step))
+                                    clean_step = {sk: sv for sk, sv in step.items() if sk != "is_memory_index"}
+                                    other_steps.append(clean_step)
                         else:
                             merged_data[k] = v
             except Exception as e:
                 logger.debug("PreInvoke interceptor %s failed: %s", type(interceptor).__name__, e)
                 continue
 
-        final_steps: List[Dict[str, Any]] = []
         try:
             from kortext.hooks.pipelines.post_tool import consume_pending_advisories
 
             conv_id = getattr(context, "conversation_id", "") or ""
             sess_id = context.session_id or ""
             for pending_msg in consume_pending_advisories(session_id=sess_id, conversation_id=conv_id):
-                if pending_msg and pending_msg not in ephemeral_messages:
-                    ephemeral_messages.append(pending_msg)
+                pending_clean = str(pending_msg).strip()
+                if pending_clean and pending_clean not in trusted_messages:
+                    trusted_messages.append(pending_clean)
         except Exception as exc:
             logger.debug("Suppressed in pre_invoke:%d: %s", 607, exc)
 
-        if ephemeral_messages:
-            final_steps.append({"ephemeralMessage": "\n\n".join(ephemeral_messages)})
+        final_steps: List[Dict[str, Any]] = []
+        if trusted_messages:
+            final_steps.append({"ephemeralMessage": "\n\n".join(trusted_messages)})
+        for mem_msg in memory_index_messages:
+            final_steps.append({"ephemeralMessage": mem_msg})
         final_steps.extend(other_steps)
 
         if final_steps:
