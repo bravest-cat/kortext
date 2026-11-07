@@ -1,5 +1,8 @@
 import json
 from pathlib import Path
+import re
+import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -89,3 +92,88 @@ def test_stop_payload_reaches_record_session_log(tmp_path):
         mock_log.assert_called_once()
         called_ctx, modified_paths = mock_log.call_args[0]
         assert str(target_file) in modified_paths
+
+
+def test_hooks_json_matchers():
+    hooks_file = Path(__file__).resolve().parent.parent / "integrations" / "antigravity" / "hooks.json"
+    data = json.loads(hooks_file.read_text(encoding="utf-8"))
+
+    pre_matcher = data["kortext-safety-gate"]["PreToolUse"][0]["matcher"]
+    for tool in ("write_file", "edit_file", "read_file", "run_command"):
+        assert re.fullmatch(pre_matcher, tool), f"PreToolUse matcher did not fully match {tool}"
+
+    post_matcher = data["kortext-cache-invalidation"]["PostToolUse"][0]["matcher"]
+    for tool in ("write_file", "edit_file"):
+        assert re.fullmatch(post_matcher, tool), f"PostToolUse matcher did not fully match {tool}"
+
+
+def test_daemon_stop(tmp_path, monkeypatch):
+    monkeypatch.setenv("KORTEXT_HOME", str(tmp_path))
+    import kortext.daemon
+
+    # 1. Process with "kortext" in command line
+    proc1 = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)  # kortext"])
+    pfile = kortext.daemon.pid_file()
+    pfile.write_text(str(proc1.pid), encoding="utf-8")
+
+    stopped1 = kortext.daemon.stop()
+    assert stopped1 is True
+    assert proc1.wait(timeout=5) is not None
+    assert proc1.poll() is not None
+
+    # 2. Process without kortext in command line
+    py_bin = "/usr/bin/python3" if "kortext" in sys.executable and Path("/usr/bin/python3").is_file() else sys.executable
+    proc2 = subprocess.Popen([py_bin, "-c", "import time; time.sleep(60)"])
+    pfile.write_text(str(proc2.pid), encoding="utf-8")
+    try:
+        stopped2 = kortext.daemon.stop()
+        assert stopped2 is False
+        assert proc2.poll() is None
+    finally:
+        proc2.terminate()
+        try:
+            proc2.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc2.kill()
+
+
+def test_pre_invoke_pipeline_advisory_and_memory_index(tmp_path, monkeypatch):
+    monkeypatch.setenv("KORTEXT_HOME", str(tmp_path / "kortext_home"))
+    monkeypatch.delenv("JOURNAL_DIR", raising=False)
+
+    from kortext.hooks.pipelines.post_tool import queue_pending_advisory
+    from kortext.hooks.pipelines.pre_invoke import PreInvokePipeline
+
+    ws = tmp_path / "workspace"
+    mem_dir = ws / ".kortext" / "memory"
+    mem_dir.mkdir(parents=True)
+    (mem_dir / "INDEX.md").write_text("# Memory Index: test_proj\n- Decision 1\n", encoding="utf-8")
+
+    queue_pending_advisory("Test pending advisory message", session_id="test_sess")
+
+    ctx = HookContext(
+        event="pre_invoke",
+        session_id="test_sess",
+        cwd=str(ws),
+        workspace_paths=(str(ws),),
+        turn_index=0,
+        raw_payload={"executionNum": 1},
+    )
+
+    pipeline = PreInvokePipeline()
+    res = pipeline.execute(ctx)
+    data = res.data or {}
+    inject_steps = data.get("injectSteps", ())
+
+    assert len(inject_steps) >= 2
+
+    advisory_step = next((s for s in inject_steps if "Test pending advisory message" in s.get("ephemeralMessage", "")), None)
+    memory_step = next((s for s in inject_steps if "Decision 1" in s.get("ephemeralMessage", "")), None)
+
+    assert advisory_step is not None
+    assert memory_step is not None
+    assert advisory_step != memory_step
+
+    assert "[unverified memory" not in advisory_step.get("ephemeralMessage", "")
+    assert "[unverified memory" in memory_step.get("ephemeralMessage", "")
+

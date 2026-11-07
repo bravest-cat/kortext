@@ -45,13 +45,9 @@ All notable changes to Kortext are documented in this file.
 
 ### Upgrading Notes
 
-1. Stop the old running daemon before upgrading:
+1. Stop the daemon before upgrading (`uv run kortext stop` stops the daemon and substrates):
    ```bash
    uv run kortext stop
-   ```
-   Or terminate running daemon processes manually:
-   ```bash
-   pkill -f "kortext.*server" || true
    ```
 2. Session logs in the memory vault (`.kortext/memory/`) store daily work logs and redacted prompts. If you do not want session logs committed to your git repository, add `.kortext/memory/` to `.gitignore`:
    ```bash
