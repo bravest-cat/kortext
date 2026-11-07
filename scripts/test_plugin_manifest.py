@@ -19,7 +19,7 @@ def test_plugin_json():
     assert re.match(r"^[a-zA-Z0-9-_]+$", data["name"]), "Plugin name must match regex"
     assert "description" in data, "Plugin description required"
     assert "mcpServers" not in data, "mcpServers must NOT be declared in plugin.json (use mcp_config.json per Antigravity spec)"
-    allowed_keys = {"$schema", "name", "description"}
+    allowed_keys = {"$schema", "name", "description", "version"}
     extra_keys = set(data.keys()) - allowed_keys
     assert not extra_keys, f"plugin.json contains unexpected keys: {extra_keys}"
     print("✅ plugin.json schema valid.")

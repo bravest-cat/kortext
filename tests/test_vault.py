@@ -23,7 +23,7 @@ from kortext.vault import (
     resolve_memory_dir,
 )
 
-FALKORDB_PORT = int(os.getenv("FALKORDB_PORT", "6381"))
+FALKORDB_PORT = int(os.getenv("FALKORDB_PORT", "6379"))
 FALKORDB_HOST = os.getenv("FALKORDB_HOST", "127.0.0.1")
 
 

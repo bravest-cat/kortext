@@ -89,7 +89,7 @@ def test_stop_guard():
     # Case A: Read-only session (no write_to_file) -> stop allowed
     res_readonly = _run_runner(
         "stop",
-        {"executionNum": 1, "terminationReason": "model_stop", "fullyIdle": True, "transcriptPath": ""},
+        {"executionNum": 0, "terminationReason": "NO_TOOL_CALL", "fullyIdle": True, "transcriptPath": ""},
     )
     assert res_readonly.get("decision") == "stop", "Read-only session must be allowed to stop"
     print("✅ Stop Hook Read-Only: Allowed termination with zero friction.")
@@ -101,7 +101,7 @@ def test_stop_guard():
 
     res_mod = _run_runner(
         "stop",
-        {"executionNum": 1, "terminationReason": "model_stop", "fullyIdle": True, "transcriptPath": path_b},
+        {"executionNum": 0, "terminationReason": "NO_TOOL_CALL", "fullyIdle": True, "transcriptPath": path_b},
         {"KORTEXT_OUTCOME_GUARD_ENFORCE": "1"},
     )
     assert res_mod.get("decision") == "continue", "Unpersisted modification with enforce=1 must return continue"
@@ -124,7 +124,7 @@ def test_stop_guard():
 
     res_done = _run_runner(
         "stop",
-        {"executionNum": 1, "terminationReason": "model_stop", "fullyIdle": True, "transcriptPath": path_c},
+        {"executionNum": 0, "terminationReason": "NO_TOOL_CALL", "fullyIdle": True, "transcriptPath": path_c},
         {"KORTEXT_OUTCOME_GUARD_ENFORCE": "1"},
     )
     assert res_done.get("decision") == "stop", "Persisted modification must be allowed to stop"
